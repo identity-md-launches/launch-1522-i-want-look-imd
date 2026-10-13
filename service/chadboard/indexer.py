@@ -37,6 +37,9 @@ def _ensure_checkpoint(conn: sqlite3.Connection, rpc: Rpc, stream: str, address:
     cp = db.get_checkpoint(conn, stream)
     if cp is None:
         first = start_block if start_block > 0 else find_deploy_block(rpc, address, head)
+        db.set_setting(conn, stream + ":start", str(first))
+        origin_verified = start_block <= 0 or rpc.get_code(address, max(0, first - 1)) in ("0x", "", None)
+        db.set_setting(conn, stream + ":originVerified", "1" if origin_verified else "0")
         prev = max(first - 1, 0)
         block = rpc.block(prev)
         db.set_checkpoint(conn, stream, prev, block["hash"])
@@ -50,7 +53,10 @@ def _ensure_checkpoint(conn: sqlite3.Connection, rpc: Rpc, stream: str, address:
     table = "transfer_events" if stream.startswith("transfers:") else "seat_events"
     with conn:
         conn.execute("BEGIN")
-        conn.execute(f"DELETE FROM {table} WHERE block_number > ?", (rewind_to,))
+        address_column = "token" if table == "transfer_events" else "nft"
+        conn.execute(f"DELETE FROM {table} WHERE {address_column}=? AND block_number > ?", (address, rewind_to))
+        conn.execute("DELETE FROM indexed_ranges WHERE stream=? AND from_block>?", (stream, rewind_to))
+        conn.execute("UPDATE indexed_ranges SET to_block=? WHERE stream=? AND from_block<=? AND to_block>?", (rewind_to, stream, rewind_to, rewind_to))
         conn.execute("DELETE FROM blocks WHERE number > ?", (rewind_to,))
         db.set_checkpoint(conn, stream, rewind_to, rpc.block(rewind_to)["hash"])
     return rewind_to + 1
@@ -60,6 +66,7 @@ def sync_transfers(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, to_block: in
     """Index ERC-20 Transfer logs up to and including to_block. Returns rows added."""
     stream = f"transfers:{cfg.token}"
     head = to_block
+    db.set_setting(conn, stream + ":target", str(to_block))
     start = _ensure_checkpoint(conn, rpc, stream, cfg.token, cfg.start_block, head)
     if cfg.max_blocks_per_run:
         to_block = min(to_block, start + cfg.max_blocks_per_run - 1)
@@ -97,6 +104,7 @@ def sync_transfers(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, to_block: in
             )
             added += conn.total_changes - before
             db.set_checkpoint(conn, stream, chunk_to, end_hash)
+            conn.execute("INSERT OR REPLACE INTO indexed_ranges VALUES(?,?,?,?)", (stream, chunk_from, chunk_to, len(rows)))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -141,6 +149,7 @@ def sync_seats(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, nft: str, to_blo
             )
             added += conn.total_changes - before
             db.set_checkpoint(conn, stream, chunk_to, end_hash)
+            conn.execute("INSERT OR REPLACE INTO indexed_ranges VALUES(?,?,?,?)", (stream, chunk_from, chunk_to, len(rows)))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

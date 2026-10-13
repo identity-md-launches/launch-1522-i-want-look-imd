@@ -9,9 +9,10 @@ import subprocess
 import time
 
 from . import db
-from .config import Config
+from .config import Config, CHAIN_ID, IMD_TOKEN
 from .indexer import sync_seats, sync_transfers
-from .rpc import Rpc
+from .rpc import Rpc, HistoricalRpc
+from .radar import Radar
 from .snapshot import build_snapshot
 
 log = logging.getLogger("chadboard.pipeline")
@@ -74,22 +75,46 @@ def refresh_once(conn, rpc: Rpc, cfg: Config, run_id: int) -> dict:
     if cp and cp["block_number"] < as_of_block:
         as_of = rpc.block(cp["block_number"])
         as_of_block = cp["block_number"]
+    if nft:
+        seat_cp = db.get_checkpoint(conn, f"seats:{nft}")
+        if seat_cp and seat_cp["block_number"] < as_of_block:
+            as_of_block = seat_cp["block_number"]
+            as_of = rpc.block(as_of_block)
+    # Configuration must be from the same block as accounting, including bounded backfills.
+    board_state = read_board_state(rpc, cfg, as_of_block)
     snapshot_id = build_snapshot(conn, rpc, cfg, as_of, nft, board_state)
     publication = write_publication(conn, cfg, snapshot_id, board_state)
+    # The immutable ranking has already been committed. Optional enrichment cannot undo it.
+    radar = Radar(conn, cfg)
+    try:
+        radar.refresh()
+        radar.bind(snapshot_id)
+    except Exception:
+        log.warning("Radar enrichment failed; Ethereum snapshot remains available")
     return {"snapshot_id": snapshot_id, "as_of_block": as_of_block, "events_added": added, "publication": publication}
 
 
 def refresh_with_retries(conn, cfg: Config) -> dict:
+    # A new mainnet IMD history must establish archive capability before indexing.
+    # Local fixtures and already-checkpointed incremental refreshes do not repeat it.
+    if cfg.chain_id == CHAIN_ID and cfg.token == IMD_TOKEN and db.get_checkpoint(conn, f"transfers:{cfg.token}") is None:
+        from .backfill import preflight
+        plan = preflight(cfg)
+        db.set_setting(conn, f"archive.preflight:{cfg.token}", json.dumps(plan))
+        cfg.log_chunk = min(cfg.log_chunk, plan["estimate"]["effectiveLogChunk"])
+        log.info("archive preflight: %d..%d; estimated scan %d requests / %d seconds",
+                 plan["historicalStartBlock"], plan["historicalEndBlock"],
+                 plan["estimate"]["transferScanRequests"], plan["estimate"]["transferScanSeconds"])
     last_error: Exception | None = None
     for attempt in range(1, cfg.retry_attempts + 1):
         run_id = db.start_run(conn, attempt)
-        rpc = Rpc(cfg.rpc_urls, timeout=cfg.rpc_timeout, attempts=cfg.rpc_attempts)
+        rpc = HistoricalRpc(cfg)
         try:
             result = refresh_once(conn, rpc, cfg, run_id)
             db.finish_run(
                 conn, run_id, "success",
                 as_of_block=result["as_of_block"], snapshot_id=result["snapshot_id"],
-                events_added=result["events_added"], rpc_requests=rpc.requests,
+                events_added=result["events_added"], rpc_requests=rpc.total_requests,
             )
             log.info("refresh succeeded: %s", result["snapshot_id"])
             return result
@@ -99,7 +124,7 @@ def refresh_with_retries(conn, cfg: Config) -> dict:
                 conn.execute("ROLLBACK")
             except Exception:  # noqa: BLE001
                 pass
-            db.finish_run(conn, run_id, "failed", error=str(err)[:1000], rpc_requests=rpc.requests)
+            db.finish_run(conn, run_id, "failed", error=str(err)[:1000], rpc_requests=rpc.total_requests)
             log.error("refresh attempt %d failed: %s", attempt, err)
             if attempt < cfg.retry_attempts:
                 time.sleep(cfg.retry_backoff_seconds * attempt)

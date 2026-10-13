@@ -11,7 +11,10 @@ or rankings are illustrated with fabricated examples.
 The implementation is React with plain CSS. `web/src/styles.css` is the source of
 truth for tokens and responsive behavior; `web/src/App.tsx` contains the page and
 payment flows, and `web/src/Results.tsx` contains the report components. There is
-one light theme and one English page with anchor navigation.
+one light theme and one English page with anchor navigation. Optional source
+observations live in `web/src/RadarPanel.tsx`; they reuse the established visual
+system and sit below the query and snapshot summary. Ethereum and Radar evidence
+remain explicitly labeled. No Radar number changes a ranking.
 
 ## Colors
 
@@ -35,18 +38,18 @@ consistent across the implementation; no gradients or translucent text are used.
 | `--color-on-accent` | `--neutral-0`, `#ffffff` | Primary-button text |
 | `--color-focus` | `--violet-800`, `#51328f` | 3px keyboard focus outline |
 | `--color-warning-bg` | `--amber-100`, `#fff3d8` | No-wallet callout |
-| `--color-warning` | `--amber-800`, `#795419` | Waiting-state dot and warning text |
+| `--color-warning` | `--amber-800`, `#795419` | Waiting-state dot, warning text, source-conflict border |
 | `--color-error` | `--red-800`, `#a02c35` | Field and transaction errors |
 | `--color-success` | `--green-700`, `#286044` | Current-snapshot indicator |
 
 The dialog backdrop is `rgb(25 21 40 / .55)`; no text is placed on it. Status
 colors always have adjacent words. Decorative lavender bars do not encode a live
 rating. Rendered text contrast passed the pinned probe; measured pairs and
-coverage are recorded in `docs/WEBSITE-VALIDATION.md`.
+coverage are recorded in `docs/VALIDATION.md`.
 
 ## Typography
 
-The UI uses the system stack `Arial, Helvetica, sans-serif`, at weights **400** and
+The UI uses the system stack `Arial, Helvetica, sans-serif`, at weights **400**, **600** and
 **700**. There are no font downloads. Addresses and transaction/evidence hashes
 use `'Courier New', Courier, monospace`, preserving the complete value with
 `overflow-wrap: anywhere`; prose never uses monospace.
@@ -94,12 +97,14 @@ The implemented breakpoints are:
 
 The query-type buttons wrap rather than overflow when text is enlarged. Fixed
 heights are not applied to text containers. Textarea height can be resized; long
-addresses wrap, never ellipsize. Report lists render 25 rows per page. Token
+addresses wrap, never ellipsize. Source controls wrap at their content width and their buttons become full width
+at 600px. Report lists render 25 rows per page. Token
 accounting becomes one label/value per row on narrow screens. Dialogs are at most
 560px wide and `100dvh − 32px` high, scrolling internally when needed.
 
-Production-rendered checks covered 320, 390, 820 and 1440px in Chromium and
-WebKit. At 390×844 the product, wallet field, fee and “Check query” button are on
+Current production-rendered checks covered 320, 390, 820 and 1440px in Chromium.
+WebKit could not start a usable page on this worker; its current-revision behavior
+is unverified (the prior website report remains historical). At 390×844 the product, wallet field, fee and “Check query” button are on
 the first screen. 200% root text enlargement was also checked; it is not claimed
 to be a native browser zoom test. See validation for limits.
 
@@ -133,6 +138,8 @@ hidden from assistive technology.
 | `Dialog` | `web/src/App.tsx` | Native modal dialog and close button; Escape closes unless wallet signing is active; explicit restoration of focus to the opener |
 | `.review-details`, `.consent` | `web/src/App.tsx` | Matched count, epoch, exact fee, full recipient, paying account and checkbox before an irreversible transfer |
 | `.payment-status` | `web/src/App.tsx` | Persistent pending reference, repeat receipt check, downloadable/restorable recovery JSON, replacement hash and explicit discard confirmation |
+| `RadarPanel`, `RadarDetails` | `web/src/RadarPanel.tsx` | Native source disclosure; labeled seat/wallet lookup; independent loading, empty, stale, unavailable and conflict states; both owners remain visible; launch participation, liquidity exclusions and raw-response evidence disclosures |
+| `.source-controls`, `.source-warning` | `web/src/styles.css:1073` | Wrapping controls with a 12px gap; 16px group spacing; 3px amber left border plus explicit “Sources disagree” text; complete addresses and hashes wrap |
 | `Results`, `WalletDetail` | `web/src/Results.tsx` | Complete wallet addresses, rank, score, tier, metric/token disclosures, filter, 25-row pagination, export and provenance |
 | `.explainers` | `web/src/App.tsx` | Native `details`/`summary` for scoring, trust, fee policy, missing wallets and recovery; no custom accordion keyboard model |
 
@@ -149,6 +156,10 @@ uses a 3px offset outline; forced-colors mode uses the system Highlight color.
 - Give one consequential action the filled primary style; use secondary buttons
   for downloads, account management and navigation.
 - Preserve complete addresses, exact amounts, observation time and trust context.
+- Label service holding scores separately from the published ChadBoard score; show
+  Radar provenance alongside observations, never as a score or sale/retention proof.
+- Keep optional enrichment controls secondary. Its absence must leave Ethereum
+  queries usable. Reuse `parseRadarObservation` before displaying service or recovery data.
 - Keep input errors beside their controls and make recovery actions explicit.
 - Add any necessary new color by semantic role; do not reuse the border color as text.
 - Reuse native form/disclosure/dialog semantics. Recheck focus return when changing dialogs.

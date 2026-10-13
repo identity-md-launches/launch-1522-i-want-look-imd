@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -12,13 +13,30 @@ log = logging.getLogger("chadboard.rpc")
 
 
 class RpcError(Exception):
-    def __init__(self, message: str, code: int | None = None, status: int | None = None):
+    def __init__(self, message: str, code: int | None = None, status: int | None = None, max_range: int | None = None):
         super().__init__(message)
         self.code = code
         self.status = status
+        self.max_range = max_range
 
 
 RANGE_HINTS = ("range", "limit", "too many", "more than", "exceed", "archive", "timeout", "too large", "cu limit")
+
+
+def safe_error(error: object) -> str:
+    """Provider errors can echo a URL or API key. Retain only diagnostic categories."""
+    if isinstance(error, RpcError):
+        return str(error)
+    return type(error).__name__
+
+
+def provider_error(message: object) -> str:
+    text = str(message).lower()
+    if "revert" in text:
+        return "RPC execution reverted"
+    if any(h in text for h in RANGE_HINTS):
+        return "RPC range or rate limit exceeded"
+    return "RPC provider rejected request"
 
 
 class Rpc:
@@ -31,6 +49,7 @@ class Rpc:
         self._cursor = 0
         self._id = 0
         self.requests = 0
+        self.log_range_limit: int | None = None
 
     def _post(self, url: str, method: str, params: list) -> dict:
         self._id += 1
@@ -43,13 +62,18 @@ class Rpc:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 payload = json.loads(resp.read())
         except urllib.error.HTTPError as err:
-            detail = err.read()[:400].decode("utf-8", "replace")
-            raise RpcError(f"HTTP {err.code} from {url}: {detail}", status=err.code) from None
+            # Extract only a numeric range cap, never persist/print the provider body.
+            detail = err.read(8192).decode("utf-8", "replace")
+            match = re.search(r"up to (?:a )?(\d+) block range", detail)
+            cap = int(match[1]) if match else None
+            if cap:
+                self.log_range_limit = cap
+            raise RpcError(f"RPC HTTP {err.code}" + (f"; maximum log range {cap} blocks" if cap else ""), status=err.code, max_range=cap) from None
         if isinstance(payload, dict) and "error" in payload:
             error = payload["error"] or {}
-            raise RpcError(str(error.get("message", error)), code=error.get("code"))
+            raise RpcError(provider_error(error.get("message", error)), code=error.get("code"))
         if not isinstance(payload, dict) or "result" not in payload:
-            raise RpcError(f"malformed response from {url}: {str(payload)[:200]}")
+            raise RpcError("malformed RPC response")
         return payload["result"]
 
     def call(self, method: str, params: list, *, rotate_on_error: bool = True) -> object:
@@ -62,11 +86,11 @@ class Rpc:
                 last = err
                 if isinstance(err, RpcError) and "revert" in str(err).lower():
                     raise  # deterministic: retrying cannot help
-                log.warning("rpc %s failed on %s (attempt %d): %s", method, url, attempt + 1, str(err)[:160])
+                log.warning("rpc %s failed (attempt %d): %s", method, attempt + 1, safe_error(err))
                 if rotate_on_error:
                     self._cursor += 1
                 time.sleep(min(0.5 * 2**attempt, 10))
-        raise RpcError(f"{method} failed on every endpoint: {last}")
+        raise RpcError(f"{method} failed on every endpoint: {safe_error(last)}") from None
 
     # Convenience wrappers -------------------------------------------------
 
@@ -113,7 +137,8 @@ class Rpc:
         Range errors shrink the chunk; success slowly grows it again (bounded by the
         configured chunk). Every yielded range is contiguous with the previous one.
         """
-        size = max(1, chunk)
+        cap = min(chunk, self.log_range_limit or chunk)
+        size = max(1, cap)
         start = from_block
         while start <= to_block:
             end = min(start + size - 1, to_block)
@@ -122,14 +147,15 @@ class Rpc:
                 logs = self._get_logs_once(params)
             except RpcError as err:
                 if size > 1 and _looks_like_range_error(err):
-                    size = max(1, size // 2)
+                    cap = min(cap, err.max_range or max(1, size // 2))
+                    size = max(1, cap)
                     log.info("shrinking log range to %d blocks after: %s", size, str(err)[:120])
                     continue
                 raise
             yield start, end, logs
             start = end + 1
-            if size < chunk:
-                size = min(chunk, size * 2)
+            if size < cap:
+                size = min(cap, size * 2)
 
     def _get_logs_once(self, params: list) -> list:
         last: Exception | None = None
@@ -142,15 +168,45 @@ class Rpc:
                 return result
             except (RpcError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
                 last = err
+                if isinstance(err, RpcError) and err.max_range:
+                    raise
                 self._cursor += 1
-                log.warning("eth_getLogs failed on %s: %s", url, str(err)[:160])
+                log.warning("eth_getLogs failed: %s", safe_error(err))
                 time.sleep(0.5 * (attempt + 1))
         assert last is not None
         if isinstance(last, RpcError):
             raise last
-        raise RpcError(str(last))
+        raise RpcError(safe_error(last)) from None
 
 
 def _looks_like_range_error(err: RpcError) -> bool:
     text = str(err).lower()
     return any(h in text for h in RANGE_HINTS) or err.status in (400, 403, 413, 429, 503)
+
+
+class HistoricalRpc(Rpc):
+    """Public RPC for current reads; archive RPC only for old state and event ranges."""
+    def __init__(self, cfg, historical_before=None):
+        super().__init__(cfg.rpc_urls, cfg.rpc_timeout, cfg.rpc_attempts)
+        self.archive = Rpc([cfg.archive_rpc_url], cfg.rpc_timeout, cfg.rpc_attempts) if cfg.archive_rpc_url else None
+        self.historical_before = historical_before
+
+    @property
+    def total_requests(self):
+        return self.requests + (self.archive.requests if self.archive else 0)
+
+    def call(self, method, params, **kwargs):
+        if self.archive and method in ("eth_getCode", "eth_call", "eth_getBlockByNumber"):
+            tag = params[0] if method == "eth_getBlockByNumber" else params[-1]
+            if isinstance(tag, str) and tag.startswith("0x"):
+                if self.historical_before is None:
+                    self.historical_before = super().block_number() - 512
+                if int(tag, 16) < self.historical_before:
+                    return self.archive.call(method, params, **kwargs)
+        return super().call(method, params, **kwargs)
+
+    def _get_logs_once(self, params):
+        # Indexer log queries are deep event scans, never browser/current-balance calls.
+        if self.archive:
+            return self.archive._get_logs_once(params)
+        return super()._get_logs_once(params)

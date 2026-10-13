@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatUnits } from "viem";
 import { EXPLORER } from "./config";
+import { RadarDetails } from "./RadarPanel";
 import {
   formatDelay,
   queryLabel,
@@ -112,7 +113,7 @@ export function Results({ payment }: { payment: PaymentRecord }) {
   const pages = Math.max(1, Math.ceil(filtered.length / 25));
   const visible = filtered.slice(page * 25, page * 25 + 25);
   const csv = [
-    "wallet,found,rank,score,tier,active_seats,launches,claimed_claims,eligible_claims,claim_delay_seconds,distinct_apps,interactions",
+    "wallet,found,rank,score,tier,active_seats,launches,claimed_claims,eligible_claims,claim_delay_seconds,distinct_apps,interactions,source,source_retrieved_at,as_of_block,source_conflict",
     ...report.rows.map((r) =>
       [
         r.wallet,
@@ -127,6 +128,10 @@ export function Results({ payment }: { payment: PaymentRecord }) {
         r.totalClaimDelay ?? "",
         r.apps ?? "",
         r.interactions ?? "",
+        r.source ?? "ethereum",
+        r.sourceRetrievedAt ?? "",
+        r.asOfBlock ?? report.snapshot.block,
+        r.conflict ?? false,
       ].join(","),
     ),
   ].join("\n");
@@ -211,9 +216,10 @@ export function Results({ payment }: { payment: PaymentRecord }) {
               </a>
               <p className="small muted">
                 {row.found
-                  ? `${TIERS[row.tier]} · ${row.seats} active seat${row.seats === 1 ? "" : "s"}`
+                  ? `${TIERS[row.tier]} · ${row.seatStatus === "unknown" ? "Seat status unknown" : `${row.seats} ${row.seatStatus === "holder" ? "held" : "active"} seat${row.seats === 1 ? "" : "s"}`}`
                   : "Not in this snapshot"}
               </p>
+              {row.source && <p className="small muted">Ethereum ranking{row.source === "merged" ? " · Radar enrichment" : ""}{row.conflict ? " · Sources disagree" : ""}</p>}
             </div>
             <div className="score-number">
               {row.found ? (row.score / 100).toFixed(2) : "N/A"}
@@ -222,6 +228,7 @@ export function Results({ payment }: { payment: PaymentRecord }) {
             {row.found && row.launches !== undefined && (
               <WalletDetail row={row} />
             )}
+            {row.radar?.dataQuality.available && <details className="wallet-detail"><summary>View source observations</summary><RadarDetails data={row.radar} /></details>}
           </li>
         ))}
       </ol>
@@ -276,22 +283,21 @@ export function Results({ payment }: { payment: PaymentRecord }) {
             </dd>
           </div>
           <div>
-            <dt>Reporter</dt>
-            <dd className="address">{report.snapshot.reporter}</dd>
+            <dt>{report.snapshot.source === "service" ? "Ranking source" : "Reporter"}</dt>
+            <dd className="address">{report.snapshot.reporter ?? "Ethereum data service"}</dd>
           </div>
           <div>
             <dt>Evidence hash</dt>
             <dd className="address">{report.snapshot.evidenceHash}</dd>
           </div>
           <div>
-            <dt>Methodology hash</dt>
-            <dd className="address">{report.snapshot.methodologyHash}</dd>
+            <dt>{report.snapshot.source === "service" ? "Score method" : "Methodology hash"}</dt>
+            <dd className="address">{report.snapshot.methodologyHash ?? "chadboard-holding-v1"}</dd>
           </div>
         </dl>
         <p className="small muted">
           This saved snapshot is historical. Downloaded results do not refresh
-          automatically. The appointed reporter attests the history; the
-          contract checks accounting and ranks.
+          automatically. {report.snapshot.source === "service" ? "The service calculates this holding score from Ethereum history; it has not been published to the board. Radar observations do not affect it." : "The appointed reporter attests the history; the contract checks accounting and ranks."}
         </p>
       </details>
     </section>

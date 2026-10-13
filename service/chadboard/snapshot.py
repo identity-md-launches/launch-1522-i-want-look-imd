@@ -139,6 +139,8 @@ def seat_census(conn: sqlite3.Connection, nft: str, as_of_block: int, spec: dict
         "activated_by_wallet": activated_by_wallet,
         "activation_block": activated_wallets,
         "activated_seats": sum(activated_by_wallet.values()),
+        "owners": owners,
+        "active_seat_ids": activated_seats if spec and "seat_topic" in spec else {s for s, w in owners.items() if w in activated_wallets},
     }
 
 
@@ -257,9 +259,18 @@ def build_snapshot(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, as_of: dict,
         quality["notes"].append("balance mismatches are kept with balanceVerified=-1; the indexed history may be incomplete for those wallets")
     quality["soldClassification"] = "not attempted: outgoing transfers are reported as transfers, never inferred as sales"
     cp = db.get_checkpoint(conn, f"transfers:{cfg.token}")
-    quality["transferHistoryComplete"] = bool(cp and cp["block_number"] >= as_of_block)
+    from .backfill import coverage
+    history = coverage(conn, cfg, as_of_block)
+    stream = f"transfers:{cfg.token}"
+    origin_verified = db.get_setting(conn, stream + ":originVerified") == "1"
+    target = int(db.get_setting(conn, stream + ":target", str(as_of_block)))
+    quality["historyCompleteAtAsOfBlock"] = bool(origin_verified and history["coverageVerified"])
+    quality["transferHistoryComplete"] = bool(quality["historyCompleteAtAsOfBlock"] and cp and cp["block_number"] >= target)
+    quality["historicalStartBlock"] = history["historicalStartBlock"]
+    quality["backfillTargetBlock"] = target
+    quality["historyGaps"] = history["gaps"]
     if not quality["transferHistoryComplete"]:
-        quality["notes"].append(f"transfer history indexed only through block {cp['block_number'] if cp else 'none'}; metrics are provisional until the backfill reaches the as-of block")
+        quality["notes"].append(f"transfer history is provisional: checkpoint {cp['block_number'] if cp else 'none'}, target {target}; verify deployment origin and range coverage")
 
     canonical = json.dumps(
         [{k: (str(v) if isinstance(v, int) and not isinstance(v, bool) else v) for k, v in r.items() if k != "onchain_balance"} for r in rows],
@@ -272,6 +283,8 @@ def build_snapshot(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, as_of: dict,
     sequence = int(seq_row["n"]) + 1
     snapshot_id = f"S{sequence}-{as_of_block}"
     metadata = {
+        "rankingAuthority": "ethereum",
+        "radarAffectsRanking": False,
         "chainId": cfg.chain_id,
         "token": cfg.token,
         "board": cfg.board,
@@ -318,6 +331,11 @@ def build_snapshot(conn: sqlite3.Connection, rpc: Rpc, cfg: Config, as_of: dict,
                 for i, r in enumerate(rows)
             ],
         )
+        if census:
+            conn.executemany("INSERT INTO snapshot_seats VALUES(?,?,?,?)", [
+                (snapshot_id, seat_id, owner, int(seat_id in census["active_seat_ids"]) if spec else None)
+                for seat_id, owner in census["owners"].items()
+            ])
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

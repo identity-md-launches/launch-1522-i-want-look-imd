@@ -125,6 +125,43 @@ CREATE TABLE IF NOT EXISTS snapshot_wallets (
   UNIQUE (snapshot_id, wallet)
 );
 CREATE INDEX IF NOT EXISTS snapshot_wallets_wallet ON snapshot_wallets(wallet);
+
+CREATE TABLE IF NOT EXISTS radar_responses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_url TEXT NOT NULL,
+  retrieved_at INTEGER NOT NULL,
+  response_hash TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  raw_body BLOB NOT NULL,
+  valid INTEGER NOT NULL,
+  normalized TEXT,
+  error TEXT
+);
+CREATE TABLE IF NOT EXISTS radar_cache (
+  source_url TEXT PRIMARY KEY,
+  response_id INTEGER REFERENCES radar_responses(id),
+  attempted_at INTEGER NOT NULL,
+  error TEXT
+);
+CREATE TABLE IF NOT EXISTS snapshot_radar (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
+  response_id INTEGER NOT NULL REFERENCES radar_responses(id),
+  PRIMARY KEY(snapshot_id, response_id)
+);
+CREATE TABLE IF NOT EXISTS snapshot_seats (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
+  seat_id TEXT NOT NULL,
+  wallet TEXT NOT NULL,
+  active INTEGER,
+  PRIMARY KEY(snapshot_id, seat_id)
+);
+CREATE TABLE IF NOT EXISTS indexed_ranges (
+  stream TEXT NOT NULL,
+  from_block INTEGER NOT NULL,
+  to_block INTEGER NOT NULL,
+  event_count INTEGER NOT NULL,
+  PRIMARY KEY(stream, from_block)
+);
 """
 
 
@@ -178,6 +215,10 @@ def latest_snapshot(conn: sqlite3.Connection) -> sqlite3.Row | None:
 
 def snapshot_row(row: sqlite3.Row) -> dict:
     return {
+        "source": "ethereum",
+        "sourceRetrievedAt": row["created_at"],
+        "dataQuality": json.loads(row["metadata"])["dataQuality"],
+        "conflict": bool(json.loads(row["metadata"])["dataQuality"].get("balanceMismatches")),
         "snapshotId": row["id"],
         "sequence": row["sequence"],
         "asOfBlock": row["as_of_block"],

@@ -80,7 +80,7 @@ export async function loadBoard(): Promise<BoardStatus> {
   });
   if (epoch === 0n) {
     // No on-chain epoch yet: fall back to the data service snapshot when one is configured.
-    const feed = await loadFeed();
+    const feed = await loadFeed().catch(() => null);
     return feed ? { kind: "ready", snapshot: feed } : { kind: "empty" };
   }
   const [data, stale, currentConfiguration] = await client.readContract({
@@ -290,6 +290,10 @@ export async function sendPayment(
     status.snapshot.stale ||
     !status.snapshot.currentConfiguration ||
     status.snapshot.epoch !== report.snapshot.epoch
+    || status.snapshot.source !== report.snapshot.source
+    || status.snapshot.snapshotId !== report.snapshot.snapshotId
+    || status.snapshot.block !== report.snapshot.block
+    || status.snapshot.evidenceHash !== report.snapshot.evidenceHash
   )
     throw new Error(
       "The snapshot changed or is no longer current. Close this review and check your query again. No payment was sent.",

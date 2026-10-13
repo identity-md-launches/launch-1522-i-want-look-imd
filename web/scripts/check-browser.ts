@@ -821,6 +821,103 @@ try {
     },
   );
   await check(
+    "Radar source lookup preserves conflicts, stale warnings, exclusions and Ethereum independence",
+    async () => {
+      let radarMode = "ready";
+      const radarWallet = "0x2222222222222222222222222222222222222222";
+      const radarTime = Math.floor(Date.now() / 1000) - 90000;
+      const radarUrl = "https://www.imdradar.site/api/feed?view=seat&id=1";
+      const radarData = {
+        source: "merged", sourceRetrievedAt: radarTime, asOfBlock: null,
+        dataQuality: { available: true, stale: true, seatDetailsComplete: true },
+        conflict: true,
+        conflicts: [{ field: "owner", kind: "ethereum-radar-disagreement", seat: 1, ethereum: account, radar: [radarWallet] }],
+        seats: [{ seat: 1, agentId: 50700, owner: radarWallet, status: "active", online: false,
+          accepted: 5, rejected: 2, failed: 1, pending: 2, latestWorkAt: radarTime,
+          responseId: 1, sourceUrl: radarUrl, sourceRetrievedAt: radarTime }],
+        relationships: [{ seat: 1, owner: radarWallet }],
+        ethereumRelationships: [{ seat: "1", wallet: account, active: 1 }],
+        launches: [{ wallet: radarWallet, participation: [5, 6], eligibleValueUsd: "200", eligibleUnclaimedUsd: "200",
+          rewards: [{ launch: 5, symbol: "GOOD", rewardTokens: "100", unclaimedTokens: "100" }],
+          excluded: [{ launch: 6, reason: "low-or-unverified-liquidity" }] }],
+        sources: [{ responseId: 1, sourceUrl: radarUrl, responseHash: "ab".repeat(32), sourceRetrievedAt: radarTime, dataQuality: { stale: true } }],
+      };
+      await context.route("https://radar.example.test/**", async (route: any) => {
+        const pathname = new URL(route.request().url()).pathname;
+        const headers = { "access-control-allow-origin": "*", "content-type": "application/json" };
+        if (radarMode === "unavailable") {
+          await route.fulfill({ status: 503, headers, body: JSON.stringify({ error: "offline" }) });
+        } else if (radarMode === "service" && pathname === "/v1/site-feed") {
+          await route.fulfill({ status: 200, headers, body: JSON.stringify({ source: "ethereum", snapshotId: "S11-900", epoch: "11", block: "900", timestamp: Math.floor(Date.now()/1000), publishedAt: Math.floor(Date.now()/1000), totalSeats: "0", activatedSeats: "0", seatCensusAvailable: false, wallets: 1, stale: false, evidenceHash: blockHash, scoreVersion: "chadboard-holding-v1" }) });
+        } else if (radarMode === "service" && pathname === "/v1/wallets") {
+          await route.fulfill({ status: 200, headers, body: JSON.stringify({ wallets: [{ wallet: account, found: true, rank: 1, score: 6500, tier: 2, seat: { count: 0, status: "unknown" }, source: "ethereum", asOfBlock: 900, conflict: false }] }) });
+        } else if (pathname === "/v1/radar/status") {
+          await route.fulfill({ status: 200, headers, body: JSON.stringify({ enabled: true, cachedResponses: 3,
+            sourceRetrievedAt: radarTime, dataQuality: { status: "degraded", staleResponses: 3 } }) });
+        } else if (pathname === "/v1/radar/seats") {
+          await route.fulfill({ status: 200, headers, body: JSON.stringify(radarMode === "malformed" ? { seats: "bad" } : radarData) });
+        } else { await route.fulfill({ status: 404, headers, body: JSON.stringify({ error: "not found" }) }); }
+      });
+      mode = "ready";
+      await page.reload();
+      await page.locator(".source-panel > summary").click();
+      await page.getByText("Connect a data service", { exact: true }).click();
+      await page.getByLabel("Data service URL").fill("https://radar.example.test");
+      await page.getByRole("button", { name: "Connect service", exact: true }).click();
+      await page.getByText("Snapshot #1 available", { exact: true }).waitFor();
+      await page.locator(".source-panel > summary").click();
+      await page.getByText(/Radar: degraded/).waitFor();
+      await page.getByRole("button", { name: "Look up enrichment", exact: true }).click();
+      assert.equal(await page.locator(":focus").getAttribute("id"), "radar-lookup");
+      await page.getByText("Enter a seat number or a full Ethereum wallet address.", { exact: true }).waitFor();
+      await page.getByLabel("Seat number or wallet address").fill("1");
+      await page.getByRole("button", { name: "Look up enrichment", exact: true }).click();
+      await page.getByText("Sources disagree", { exact: true }).waitFor();
+      await page.getByText(/Stale Radar data/).waitFor();
+      await page.getByText(/Eligible rewards: \$200.00; unclaimed: \$200.00/).waitFor();
+      assert.ok((await page.locator(".radar-details").innerText()).includes(account));
+      assert.ok((await page.locator(".radar-details").innerText()).includes(radarWallet));
+      await page.getByText("View launch participation and rewards", { exact: true }).click();
+      await page.getByText("Excluded from value estimates: 6.", { exact: true }).waitFor();
+      await page.getByText("View Radar source evidence", { exact: true }).click();
+      assert.equal(await page.getByRole("link", { name: "Open stored response 1" }).getAttribute("href"), "https://radar.example.test/v1/radar/raw/1");
+      for (const width of [320, 390, 820, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      }
+      if (process.env.IMD_AXE) {
+        const { default: AxeBuilder } = await import(pathToFileURL(process.env.IMD_AXE).href);
+        const audit = await new AxeBuilder({ page }).analyze();
+        await writeFile(join(output, "axe-radar.json"), JSON.stringify(audit.violations, null, 2));
+        assert.deepEqual(audit.violations.map((v: any) => v.id), []);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator(".radar-details").screenshot({ path: join(output, "radar-conflict-mock.png") });
+      radarMode = "malformed";
+      await page.getByRole("button", { name: "Look up enrichment", exact: true }).click();
+      await page.getByText("Malformed enrichment response. Ethereum rankings are unchanged.", { exact: true }).waitFor();
+      radarMode = "unavailable";
+      await page.getByRole("button", { name: "Refresh enrichment", exact: true }).click();
+      await page.getByText(/Radar enrichment is unavailable. Ethereum ranking queries still work/).waitFor();
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.getByText("Snapshot #1 available", { exact: true }).waitFor();
+      mode = "empty";
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.getByText("Awaiting the first snapshot", { exact: true }).waitFor();
+      assert.equal(await page.locator("dialog").count(), 0);
+      radarMode = "service";
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.getByText("Snapshot S11-900 available (data service)", { exact: true }).waitFor();
+      assert.equal(await page.locator(".board-overview strong").first().innerText(), "Unavailable");
+      await page.getByText(/This is the data service’s Ethereum holding score/).waitFor();
+      await page.getByLabel("Ethereum wallet addresses").fill(account);
+      await page.getByRole("button", { name: "Check query", exact: true }).click();
+      await page.getByRole("heading", { name: "Review your query" }).waitFor();
+      assert.match(await page.locator(".review-details").innerText(), /1 ranked \/ 1 requested/);
+      await page.keyboard.press("Escape");
+    },
+  );
+  await check(
     "No JavaScript exceptions, local console errors or failed local resources",
     async () => {
       assert.deepEqual(errors, []);

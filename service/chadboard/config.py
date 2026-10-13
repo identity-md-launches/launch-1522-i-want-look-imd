@@ -62,6 +62,15 @@ class Config:
     publication_dir: Path = field(default_factory=lambda: Path(_env("CHADBOARD_PUBLICATION_DIR", "service/data/publications")))
     rpc_timeout: int = field(default_factory=lambda: _env_int("CHADBOARD_RPC_TIMEOUT", 60))
     rpc_attempts: int = field(default_factory=lambda: _env_int("CHADBOARD_RPC_ATTEMPTS", 5))
+    # Never included in API metadata, logs or frontend configuration.
+    archive_rpc_url: str = field(default_factory=lambda: _env("ETH_ARCHIVE_RPC_URL", ""), repr=False)
+    radar_enabled: bool = field(default_factory=lambda: _env("CHADBOARD_RADAR_ENABLED", "0") == "1")
+    radar_ttl: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_TTL_SECONDS", 900))
+    radar_max_age: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_MAX_AGE_SECONDS", 86400))
+    radar_timeout: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_TIMEOUT", 8))
+    radar_budget_seconds: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_BUDGET_SECONDS", 60))
+    radar_seat_limit: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_SEAT_LIMIT", 2048))
+    radar_min_liquidity_usd: int = field(default_factory=lambda: _env_int("CHADBOARD_RADAR_MIN_LIQUIDITY_USD", 2000))
 
     def activation_spec(self) -> dict | None:
         if not self.activation_event:

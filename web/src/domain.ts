@@ -5,6 +5,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
+import { parseRadarObservation, type RadarObservation } from "./radar-data";
 
 export const PACKS = [
   { count: 10, price: "0.1", detail: "A quick look" },
@@ -26,13 +27,16 @@ export type Snapshot = {
   wallets: number;
   stale: boolean;
   currentConfiguration: boolean;
-  reporter: Address;
+  reporter: Address | null;
   evidenceHash: Hex;
-  methodologyHash: Hex;
+  methodologyHash: Hex | null;
   // "service" rows come from the read-only data service feed while the board
   // has no published epoch; "chain" rows come from the IMDChadBoard contract.
   source?: "chain" | "service";
   snapshotId?: string;
+  seatCensusAvailable?: boolean;
+  dataSource?: "ethereum" | "imd-radar" | "merged";
+  sourceRetrievedAt?: number;
 };
 export type BoardStatus =
   | { kind: "loading" }
@@ -69,6 +73,12 @@ export type WalletRow = {
   retentionBps?: number;
   supportBps?: number;
   tokens?: TokenObservation[];
+  source?: "ethereum" | "imd-radar" | "merged";
+  sourceRetrievedAt?: number;
+  asOfBlock?: number;
+  seatStatus?: string;
+  conflict?: boolean;
+  radar?: RadarObservation;
 };
 export type Report = {
   query: Query;
@@ -202,9 +212,9 @@ export function decodeRecovery(text: string): PaymentRecord {
     !digits(snapshot.totalSeats) ||
     !digits(snapshot.activatedSeats) ||
     !integer(snapshot.wallets) ||
-    !address(snapshot.reporter) ||
+    !(address(snapshot.reporter) || (snapshot.source === "service" && snapshot.reporter === null)) ||
     !hash(snapshot.evidenceHash) ||
-    !hash(snapshot.methodologyHash) ||
+    !(hash(snapshot.methodologyHash) || (snapshot.source === "service" && snapshot.methodologyHash === null)) ||
     typeof snapshot.stale !== "boolean" ||
     typeof snapshot.currentConfiguration !== "boolean"
   )
@@ -217,6 +227,10 @@ export function decodeRecovery(text: string): PaymentRecord {
   )
     return invalid();
   for (const row of rows) {
+    if (row.radar !== undefined) {
+      try { row.radar = parseRadarObservation(row.radar); } catch { return invalid(); }
+    }
+    if (row.source !== undefined && !["ethereum", "imd-radar", "merged"].includes(row.source)) return invalid();
     if (
       !row ||
       !address(row.wallet) ||

@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 
 from . import db
 from .config import SCORE_VERSION, TIERS, Config
+from .radar import Radar, select_observations
+from .backfill import coverage
 
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 TOP_SIZES = (10, 50, 100, 1000)
@@ -96,7 +98,32 @@ class Api:
         return db.snapshot_row(row)
 
     def meta(self, snap: dict) -> dict:
-        return {k: snap[k] for k in ("snapshotId", "asOfBlock", "asOfTimestamp", "asOfIso", "scoreVersion", "rankedWallets", "totalSeats", "activatedSeats")}
+        return {k: snap[k] for k in ("snapshotId", "asOfBlock", "asOfTimestamp", "asOfIso", "scoreVersion", "rankedWallets", "totalSeats", "activatedSeats", "source", "sourceRetrievedAt", "dataQuality", "conflict")}
+
+    def enrich(self, rows: list[dict], snap: dict) -> list[dict]:
+        bundle = Radar(self.conn, self.cfg).observations(snap["snapshotId"])
+        for row in rows:
+            radar = select_observations(bundle, address=row["wallet"])
+            row.update(source="merged" if radar["dataQuality"]["available"] else "ethereum",
+                       sourceRetrievedAt=snap["sourceRetrievedAt"], asOfBlock=snap["asOfBlock"],
+                       dataQuality={**snap["dataQuality"], "radar": radar["dataQuality"]},
+                       conflict=radar["conflict"], conflicts=radar["conflicts"], radar=radar,
+                       fieldSources={k: "ethereum" for k in ("rank", "score", "tier", "seat", "balances", "holding")})
+            for field in ("seat", "balances", "holding"):
+                if field in row:
+                    row[field].update(source="ethereum", sourceRetrievedAt=snap["sourceRetrievedAt"], asOfBlock=snap["asOfBlock"])
+            if row.get("balances", {}).get("balanceVerified") == "mismatch":
+                row["conflict"] = True
+                row["conflicts"] = [*row["conflicts"], {"field": "balance", "kind": "ethereum-accounting-disagreement",
+                    "indexedTransfers": row["balances"]["current"], "ethereum": row["balances"]["onChainAtAsOfBlock"],
+                    "preferredSource": "ethereum", "asOfBlock": snap["asOfBlock"]}]
+        return rows
+
+    def envelope(self, snap: dict, rows: list[dict]) -> dict:
+        return {"source": "merged" if any(r["source"] == "merged" for r in rows) else "ethereum",
+                "sourceRetrievedAt": snap["sourceRetrievedAt"], "asOfBlock": snap["asOfBlock"],
+                "dataQuality": snap["dataQuality"], "conflict": any(r["conflict"] for r in rows),
+                "conflicts": [{"wallet": r["wallet"], "details": r["conflicts"]} for r in rows if r["conflict"]]}
 
     # Endpoints -----------------------------------------------------------
 
@@ -106,6 +133,13 @@ class Api:
         last_run = self.conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         cp = db.get_checkpoint(self.conn, f"transfers:{self.cfg.token}")
         return {
+            "source": "ethereum",
+            "sourceRetrievedAt": latest["created_at"] if latest else None,
+            "asOfBlock": latest["as_of_block"] if latest else None,
+            "dataQuality": json.loads(latest["metadata"])["dataQuality"] if latest else {"available": False},
+            "conflict": False,
+            "radar": Radar(self.conn, self.cfg).status(),
+            "coverage": coverage(self.conn, self.cfg),
             "service": "chadboard-data",
             "scoreVersion": SCORE_VERSION,
             "now": int(time.time()),
@@ -122,7 +156,9 @@ class Api:
 
     def snapshots(self) -> dict:
         rows = self.conn.execute("SELECT * FROM snapshots ORDER BY sequence DESC").fetchall()
-        return {"snapshots": [db.snapshot_row(r) for r in rows]}
+        return {"source": "ethereum", "sourceRetrievedAt": rows[0]["created_at"] if rows else None,
+                "asOfBlock": rows[0]["as_of_block"] if rows else None,
+                "dataQuality": {"available": bool(rows)}, "conflict": False, "snapshots": [db.snapshot_row(r) for r in rows]}
 
     def wallets(self, addresses: list[str], snapshot_id: str | None) -> dict:
         if not addresses:
@@ -137,7 +173,8 @@ class Api:
         for a in addresses:
             row = self.conn.execute("SELECT * FROM snapshot_wallets WHERE snapshot_id = ? AND wallet = ?", (snap["snapshotId"], a.lower())).fetchone()
             out.append(wallet_json(row) if row else {"wallet": a.lower(), "found": False, "rank": 0, "note": "not in this snapshot's ranked set"})
-        return {"snapshot": self.meta(snap), "dataQuality": snap["metadata"]["dataQuality"], "wallets": out}
+        out = self.enrich(out, snap)
+        return {**self.envelope(snap, out), "snapshot": self.meta(snap), "wallets": out}
 
     def leaderboard(self, top: int, snapshot_id: str | None, offset: int = 0) -> dict:
         if top not in TOP_SIZES:
@@ -146,7 +183,8 @@ class Api:
         rows = self.conn.execute(
             "SELECT * FROM snapshot_wallets WHERE snapshot_id = ? ORDER BY rank LIMIT ? OFFSET ?", (snap["snapshotId"], top, offset)
         ).fetchall()
-        return {"snapshot": self.meta(snap), "top": top, "offset": offset, "ordering": "score desc, then numeric wallet address asc", "rows": [wallet_json(r) for r in rows]}
+        out = self.enrich([wallet_json(r) for r in rows], snap)
+        return {**self.envelope(snap, out), "snapshot": self.meta(snap), "top": top, "offset": offset, "ordering": "score desc, then numeric wallet address asc", "rows": out}
 
     def ranking(self, kind: str, limit: int, snapshot_id: str | None) -> dict:
         if kind not in RANKINGS:
@@ -157,7 +195,8 @@ class Api:
         rows = self.conn.execute(
             f"SELECT * FROM snapshot_wallets WHERE snapshot_id = ? AND {where} ORDER BY {order} LIMIT ?", (snap["snapshotId"], max(1, min(limit, 1000)))
         ).fetchall()
-        return {"snapshot": self.meta(snap), "ranking": kind, "definition": RANKINGS[kind][1], "dataQuality": snap["metadata"]["dataQuality"], "rows": [wallet_json(r) for r in rows]}
+        out = self.enrich([wallet_json(r) for r in rows], snap)
+        return {**self.envelope(snap, out), "snapshot": self.meta(snap), "ranking": kind, "definition": RANKINGS[kind][1], "rows": out}
 
     def targets(self, q: dict, snapshot_id: str | None) -> dict:
         snap = self.snapshot(snapshot_id)
@@ -209,21 +248,28 @@ class Api:
             f"SELECT * FROM snapshot_wallets WHERE {' AND '.join(clauses)} ORDER BY rank LIMIT ?", (*params, limit)
         ).fetchall()
         total = self.conn.execute(f"SELECT COUNT(*) AS n FROM snapshot_wallets WHERE {' AND '.join(clauses)}", params).fetchone()["n"]
-        return {"snapshot": self.meta(snap), "filters": applied, "limit": limit, "matched": total, "dataQuality": snap["metadata"]["dataQuality"], "rows": [wallet_json(r) for r in rows]}
+        out = self.enrich([wallet_json(r) for r in rows], snap)
+        return {**self.envelope(snap, out), "snapshot": self.meta(snap), "filters": applied, "limit": limit, "matched": total, "rows": out}
 
     def publication(self, snapshot_id: str | None) -> dict:
         snap = self.snapshot(snapshot_id)
         path = self.cfg.publication_dir / f"{snap['snapshotId']}.json"
         if not path.exists():
             raise ApiError(404, "no publication payload stored for this snapshot")
-        return json.loads(path.read_text())
+        return {**json.loads(path.read_text()), "source": "ethereum", "sourceRetrievedAt": snap["sourceRetrievedAt"],
+                "asOfBlock": snap["asOfBlock"], "dataQuality": snap["dataQuality"], "conflict": snap["conflict"]}
 
     def site_feed(self, snapshot_id: str | None) -> dict:
         """Compact feed in the shape the static website consumes."""
         snap = self.snapshot(snapshot_id)
         q = snap["metadata"]["dataQuality"]
         return {
-            "source": "service",
+            "source": "ethereum",
+            "provider": "chadboard-data",
+            "sourceRetrievedAt": snap["sourceRetrievedAt"],
+            "asOfBlock": snap["asOfBlock"],
+            "conflict": snap["conflict"],
+            "radar": Radar(self.conn, self.cfg).status(),
             "snapshotId": snap["snapshotId"],
             "epoch": str(snap["sequence"]),
             "block": str(snap["asOfBlock"]),
@@ -231,8 +277,9 @@ class Api:
             "publishedAt": snap["createdAt"],
             "totalSeats": str(snap["totalSeats"] or 0),
             "activatedSeats": str(snap["activatedSeats"] or 0),
+            "seatCensusAvailable": snap["totalSeats"] is not None and snap["activatedSeats"] is not None,
             "wallets": snap["rankedWallets"],
-            "stale": not q.get("transferHistoryComplete", False),
+            "stale": not q.get("transferHistoryComplete", False) or time.time() - snap["asOfTimestamp"] > self.cfg.interval_seconds * 2,
             "currentConfiguration": True,
             "evidenceHash": "0x" + snap["contentHash"],
             "scoreVersion": snap["scoreVersion"],
@@ -247,19 +294,49 @@ class Api:
         if parts[:1] != ["v1"]:
             raise ApiError(404, "unknown route; see /v1")
         rest = parts[1:]
+        if rest == ["radar", "status"]:
+            return Radar(self.conn, self.cfg).status()
+        if rest == ["radar", "activity"]:
+            return Radar(self.conn, self.cfg).activity()
+        if rest in (["radar", "seats"], ["radar", "wallets"]):
+            address = query.get("wallet", [None])[0]
+            seat = query.get("seat", [None])[0]
+            if address is not None and not ADDRESS_RE.fullmatch(address):
+                raise ApiError(400, "wallet must be an Ethereum address")
+            if seat is not None and (not seat.isdigit() or len(seat) > 10):
+                raise ApiError(400, "seat must be a nonnegative integer")
+            snap = self.snapshot(sid) if sid else None
+            latest = db.latest_snapshot(self.conn) if snap is None else None
+            result = Radar(self.conn, self.cfg).observations(snap["snapshotId"] if snap else None, address.lower() if address else None, int(seat) if seat is not None else None, latest["id"] if latest else None)
+            if snap:
+                result["ethereumAsOfBlock"] = snap["asOfBlock"]
+            return result
+        if len(rest) == 3 and rest[:2] == ["radar", "raw"] and rest[2].isdigit():
+            row = self.conn.execute("SELECT * FROM radar_responses WHERE id=?", (int(rest[2]),)).fetchone()
+            if row is None:
+                raise ApiError(404, "unknown Radar response")
+            return {"source": "imd-radar", "sourceRetrievedAt": row["retrieved_at"], "asOfBlock": None,
+                    "sourceUrl": row["source_url"], "responseHash": row["response_hash"], "schemaVersion": row["schema_version"],
+                    "dataQuality": {"valid": bool(row["valid"]), "error": row["error"]}, "conflict": False,
+                    "rawBodyBase64": __import__("base64").b64encode(row["raw_body"]).decode()}
         if not rest:
             return {
+                "source": "ethereum", "sourceRetrievedAt": None, "asOfBlock": None,
+                "dataQuality": {"kind": "route-directory"}, "conflict": False,
                 "routes": [
                     "/v1/health", "/v1/status", "/v1/snapshots", "/v1/snapshot/latest", "/v1/snapshot/<id>",
                     "/v1/wallets?addresses=0x..,0x..", "/v1/leaderboard?top=10|50|100|1000",
                     "/v1/rankings/<current-holding|longest-holding|balance|retained-all|retention-ratio|never-sent>?limit=N",
                     "/v1/targets?activatedOnly=1&minScore=..&tier=..&minHoldDays=..&minBalance=..&minRetentionRatio=..&neverSent=1&heldContinuously=1&retainedAll=1&limit=N",
                     "/v1/publication/latest", "/v1/site-feed",
+                    "/v1/radar/status", "/v1/radar/seats?seat=0", "/v1/radar/wallets?wallet=0x..",
+                    "/v1/radar/activity", "/v1/radar/raw/<responseId>",
                 ],
                 "note": "add ?snapshot=<id> to any query to read a prior immutable snapshot",
             }
         if rest == ["health"]:
-            return {"ok": True, "now": int(time.time())}
+            return {"source": "ethereum", "sourceRetrievedAt": None, "asOfBlock": None,
+                    "dataQuality": {"kind": "service-health"}, "conflict": False, "ok": True, "now": int(time.time())}
         if rest == ["status"]:
             return self.status()
         if rest == ["snapshots"]:
@@ -283,8 +360,6 @@ class Api:
 
 
 def make_server(conn: sqlite3.Connection, cfg: Config) -> ThreadingHTTPServer:
-    api = Api(conn, cfg)
-
     class Handler(BaseHTTPRequestHandler):
         server_version = "chadboard-data/1.0"
 
@@ -312,13 +387,23 @@ def make_server(conn: sqlite3.Connection, cfg: Config) -> ThreadingHTTPServer:
         def do_GET(self) -> None:  # noqa: N802
             url = urlparse(self.path)
             try:
-                self._send(200, api.handle(url.path, parse_qs(url.query)))
+                # Readers use independent, consistent transactions. The scheduler's
+                # uncommitted snapshot rows/cache writes cannot leak through the API.
+                reader = sqlite3.connect(cfg.db_path, timeout=30, isolation_level=None)
+                reader.row_factory = sqlite3.Row
+                try:
+                    reader.execute("PRAGMA query_only=ON")
+                    reader.execute("BEGIN")
+                    body = Api(reader, cfg).handle(url.path, parse_qs(url.query))
+                finally:
+                    reader.close()
+                self._send(200, body)
             except ApiError as err:
                 self._send(err.status, {"error": str(err)})
             except ValueError as err:
                 self._send(400, {"error": str(err)[:200]})
-            except Exception as err:  # noqa: BLE001
-                self._send(500, {"error": "internal error", "detail": str(err)[:200]})
+            except Exception:  # noqa: BLE001
+                self._send(500, {"error": "internal error"})
 
         def do_POST(self) -> None:  # noqa: N802
             self._send(405, {"error": "read-only API: GET only"})

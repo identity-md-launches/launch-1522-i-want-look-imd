@@ -249,6 +249,8 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 400)
         finally:
             server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

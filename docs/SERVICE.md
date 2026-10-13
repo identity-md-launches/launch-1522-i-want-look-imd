@@ -12,17 +12,25 @@ service/chadboard/
   indexer.py    chunked, checkpointed, idempotent log indexing (IMD + seat NFT)
   snapshot.py   wallet metrics, ChadBoard holding score, snapshot storage
   pipeline.py   refresh orchestration with retries; board-format publication
+  radar.py      optional structured Radar cache and source conflict reconciliation
+  backfill.py   archive preflight, dry-run, request estimate and range coverage
   api.py        GET-only JSON API with CORS
-  __main__.py   CLI: refresh | serve | run | status | export
+  __main__.py   CLI: refresh | serve | run | status | export | preflight | coverage | radar
 service/tests/test_pipeline.py   end-to-end test on a loopback Anvil chain
 ```
+
+See [RADAR.md](RADAR.md) for optional enrichment, source fields, archive routing,
+quarantine/caching behavior and the distinction between service holding scores and
+published ChadBoard scores. The current worker did not complete the full mainnet
+backfill; see [validation](VALIDATION.md).
 
 ## Run it on the worker / VPS
 
 ```sh
-cd service
+export PYTHONPATH=service
 export CHADBOARD_DB=/var/lib/chadboard/chadboard.sqlite      # durable disk
-export CHADBOARD_RPC_URLS="https://<archive-rpc>,https://ethereum-rpc.publicnode.com"
+# Supply ETH_ARCHIVE_RPC_URL privately in the server environment.
+# Keep CHADBOARD_RPC_URLS for public current-state reads.
 python3 -m chadboard refresh      # one indexing + snapshot pass (resumable)
 python3 -m chadboard run          # API on 127.0.0.1:8787 + refresh every 24 h
 python3 -m chadboard status       # JSON: last successful refresh, checkpoint, latest snapshot
@@ -39,12 +47,13 @@ because it is read-only and holds no secrets.
 The full IMD transfer backfill (token deployed at block 23501863, tens of
 thousands of transfers) needs an RPC that serves historical `eth_getLogs`.
 The two public endpoints in `network.json` refuse ranges older than a few
-thousand blocks, so set `CHADBOARD_RPC_URLS` to an archive-capable endpoint
-first. Each chunk commits its events and checkpoint in one transaction, so a
+thousand blocks, so supply `ETH_ARCHIVE_RPC_URL` and run the archive preflight
+first. Provider plan limits also matter: see `RADAR-VALIDATION.json`. Each chunk commits its events and checkpoint in one transaction, so a
 killed process resumes exactly where it stopped; `CHADBOARD_MAX_BLOCKS_PER_RUN`
 bounds one pass and still yields a consistent snapshot as of the last fully
 indexed block, flagged `transferHistoryComplete=false` until the backfill
-catches up.
+catches up and origin/range coverage is verified. API read transactions use their
+own connections so partial writes cannot leak into an in-flight response.
 
 ### Settings
 

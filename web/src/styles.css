@@ -1069,3 +1069,19 @@ dialog .error {
 input[type="file"] {
   margin-block-end: var(--space-3);
 }
+
+/* Optional source disclosure reuses the existing flat surface and type scale. */
+.source-panel { margin-block: var(--space-6); border-block: 1px solid var(--color-border); padding-block: var(--space-4); }
+.source-panel > summary { font-weight: 600; }
+.source-panel p, .radar-details p { overflow-wrap: anywhere; }
+.source-form, .service-setting { margin-block: var(--space-4); }
+.source-controls { display: flex; flex-wrap: wrap; gap: 12px; margin-block-start: 8px; }
+.source-controls input { flex: 1 1 240px; min-width: 0; }
+.source-controls .button { flex: 0 1 auto; }
+.source-list { padding: 0; list-style: none; }
+.source-list > li { padding-block: 16px; border-block-end: 1px solid var(--color-border); }
+.source-list p { margin-block: 4px; }
+.source-wrap, .source-warning li { overflow-wrap: anywhere; }
+.source-warning { border-inline-start: 3px solid var(--color-warning); padding-inline-start: 16px; margin-block: 16px; }
+.radar-details > div, .radar-details > details { margin-block-start: 24px; }
+@media (max-width: 600px) { .source-controls .button { width: 100%; } }

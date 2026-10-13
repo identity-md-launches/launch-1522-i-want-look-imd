@@ -1,3 +1,4 @@
+import { RadarPanel } from "./RadarPanel";
 import {
   useCallback,
   useEffect,
@@ -225,6 +226,7 @@ export default function App() {
       : status.kind === "error"
         ? "Unavailable"
         : "Not published";
+  const serviceSnapshot = status.kind === "ready" && status.snapshot.source === "service";
   const price =
     mode === "leaders"
       ? queryPrice({ kind: "leaders", count: size })
@@ -602,18 +604,25 @@ export default function App() {
               <br />a Chad?
             </h2>
             <p>
-              Five signals. One score out of 100.
+              {serviceSnapshot ? "An Ethereum holding score out of 100." : "Five signals. One score out of 100."}
               <br />
-              Measured from published on-chain snapshots.
+              {serviceSnapshot ? "Not yet published on the ChadBoard contract." : "Measured from published on-chain snapshots."}
             </p>
             <ol className="score-factors">
-              {[
+              {(serviceSnapshot ? [
+                ["IMD retention", "30", "100%"],
+                ["Current holding period", "20", "66.667%"],
+                ["Longest holding period", "10", "33.333%"],
+                ["No outgoing transfers", "15", "50%"],
+                ["IMD balance", "15", "50%"],
+                ["Activated seats", "10", "33.333%"],
+              ] : [
                 ["Launches initiated", "30", "100%"],
                 ["Rewards held", "30", "100%"],
                 ["Claim timing", "15", "50%"],
                 ["Extra token purchases", "15", "50%"],
                 ["Ecosystem app activity", "10", "33.333%"],
-              ].map(([label, points, width], index) => (
+              ]).map(([label, points, width], index) => (
                 <li key={label}>
                   <span className="factor-index">0{index + 1}</span>
                   <div>
@@ -639,7 +648,7 @@ export default function App() {
             <span className="small muted">Total seats</span>
             <strong>
               {status.kind === "ready"
-                ? BigInt(status.snapshot.totalSeats).toLocaleString()
+                ? status.snapshot.seatCensusAvailable === false ? "Unavailable" : BigInt(status.snapshot.totalSeats).toLocaleString()
                 : missingValue}
             </strong>
           </div>
@@ -647,7 +656,7 @@ export default function App() {
             <span className="small muted">Activated seats</span>
             <strong>
               {status.kind === "ready"
-                ? BigInt(status.snapshot.activatedSeats).toLocaleString()
+                ? status.snapshot.seatCensusAvailable === false ? "Unavailable" : BigInt(status.snapshot.activatedSeats).toLocaleString()
                 : missingValue}
             </strong>
           </div>
@@ -705,11 +714,12 @@ export default function App() {
                 </a>
                 . Results describe this snapshot, not real-time wallet activity.
                 {status.snapshot.source === "service" &&
-                  " This snapshot comes from the ChadBoard data service and is not yet published on the Ethereum board."}
+                  " This is the data service’s Ethereum holding score, not the published ChadBoard score. Radar observations cannot change its ranking."}
               </p>
             )}
           </div>
         )}
+        <RadarPanel />
         {pending && (
           <section className="payment-status" aria-labelledby="payment-title">
             <h2 id="payment-title">Your payment is being tracked</h2>
@@ -839,12 +849,12 @@ export default function App() {
           <div className="explainers">
             <details open>
               <summary>What does the score measure?</summary>
-              <p>
+              {serviceSnapshot ? <p>The data service measures IMD retention (30 points), current holding duration (20), longest holding duration (10), no outgoing transfers (15), balance (15), and verified seat activation (10). It uses Ethereum state and Transfer history. This is separate from the contract’s published participation score.</p> : <p>
                 Launches earn up to 30 points, reward retention 30, claim timing
                 15, extra token purchases 15, and distinct ecosystem apps 10.
                 The contract stores scores from 0 to 10,000; this interface
                 displays them out of 100.
-              </p>
+              </p>}
               <p>
                 Observer: below 25. Contributor: 25–49.99. Chad: 50–74.99.
                 GigaChad: 75–100. These tiers describe measured participation.
@@ -916,8 +926,7 @@ export default function App() {
             <details>
               <summary>Why might a wallet be missing?</summary>
               <p>
-                A wallet must be associated with an activated seat in the
-                selected snapshot. Later activity appears only after another
+                {serviceSnapshot ? "The service uses verified seat holders or activated seats when configured, otherwise indexed IMD holders. Radar-only wallets are not ranked." : "A wallet must be associated with an activated seat in the selected snapshot."} Later activity appears only after another
                 snapshot is published. If none of your wallets is found, the
                 interface will not request payment.
               </p>

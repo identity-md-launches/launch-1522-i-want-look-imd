@@ -1,4 +1,8 @@
-# Website validation and design review
+# Original website validation and design review
+
+This is the earlier website assignment’s historical report. For the current Radar
+adapter, production export and actual checks, see
+[the current validation report](VALIDATION.md).
 
 Worker verification on 2026-10-13. These are reproducible worker-side observations,
 not independent network certification.

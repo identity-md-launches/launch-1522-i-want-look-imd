@@ -41,14 +41,31 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("serve", help="serve the read-only query API")
     sub.add_parser("run", help="serve the API and refresh on the configured interval")
     sub.add_parser("status", help="print the service status as JSON")
+    plan = sub.add_parser("preflight", help="verify archive history, estimate requests and run a small isolated dry-run")
+    plan.add_argument("--end-block", type=int)
+    sub.add_parser("coverage", help="report exact indexed block coverage and gaps")
+    sub.add_parser("radar", help="refresh optional Radar cache independently of Ethereum")
     export = sub.add_parser("export", help="print a snapshot's full ranked table as JSON")
     export.add_argument("--snapshot", default="latest")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     cfg = Config()
+    if args.command == "preflight":
+        from .backfill import preflight
+        print(json.dumps(preflight(cfg, args.end_block), indent=2))
+        return 0
     conn = db.connect(cfg.db_path)
     api = Api(conn, cfg)
+
+    if args.command == "coverage":
+        from .backfill import coverage
+        print(json.dumps(coverage(conn, cfg), indent=2))
+        return 0
+    if args.command == "radar":
+        from .radar import Radar
+        print(json.dumps(Radar(conn, cfg).refresh(), indent=2))
+        return 0
 
     if args.command == "refresh":
         result = refresh_with_retries(conn, cfg)

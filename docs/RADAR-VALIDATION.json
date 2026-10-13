@@ -1,0 +1,504 @@
+{
+  "archivePreflight": {
+    "archiveVariablePresent": true,
+    "chainId": 1,
+    "token": "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+    "historicalStartBlock": 23501863,
+    "historicalEndBlock": 26184642,
+    "historicalBlockTimestamp": 1759550123,
+    "historicalBlockHash": "0xcdf1f64305570e93a9380bd0f484e5e17da3a54a1f346d8b8f46d34031b67284",
+    "historicalAgeBlocks": 2682779,
+    "probes": [
+      {
+        "fromBlock": 23501863,
+        "toBlock": 23501872,
+        "events": 0
+      },
+      {
+        "fromBlock": 24172557,
+        "toBlock": 24172566,
+        "events": 0
+      },
+      {
+        "fromBlock": 24843252,
+        "toBlock": 24843261,
+        "events": 0
+      },
+      {
+        "fromBlock": 25513947,
+        "toBlock": 25513956,
+        "events": 0
+      },
+      {
+        "fromBlock": 26184633,
+        "toBlock": 26184642,
+        "events": 8
+      }
+    ],
+    "dryRun": {
+      "startBlock": 23501863,
+      "endBlock": 23501882,
+      "eventCount": 0,
+      "rpcRequests": 6,
+      "seconds": 0.695,
+      "resumeAddedEvents": 0
+    },
+    "estimate": {
+      "effectiveLogChunk": 10,
+      "logRequests": 268278,
+      "checkpointBlockRequests": 268278,
+      "transferScanRequests": 536557,
+      "transferScanSeconds": 81840,
+      "additionalSnapshotRequests": "one per uncached timestamp block plus configured balance checks and board reads",
+      "assumptions": "configured chunk size; no provider range shrink or retries. Timestamp work depends on actual wallet/event count."
+    },
+    "preflightRequests": 42,
+    "preflightSeconds": 6.406,
+    "verifiedAt": 1791909245,
+    "sampledEventCount": 8,
+    "sampledWalletCount": 11,
+    "fullBackfillComplete": false,
+    "gaps": [
+      {
+        "fromBlock": 23501883,
+        "toBlock": 24172556
+      },
+      {
+        "fromBlock": 24172567,
+        "toBlock": 24843251
+      },
+      {
+        "fromBlock": 24843262,
+        "toBlock": 25513946
+      },
+      {
+        "fromBlock": 25513957,
+        "toBlock": 26184632
+      }
+    ],
+    "countScope": "non-overlapping probe windows only, not whole-history totals; dry-run uses an isolated database",
+    "limitations": [
+      "The worker shell did not inherit ETH_ARCHIVE_RPC_URL; the supplied value was injected into server-process memory only.",
+      "Provider HTTP 400: Free tier permits eth_getLogs ranges of at most 10 blocks.",
+      "Both configured public endpoints returned HTTP 403 for a 1000-block historical Transfer query.",
+      "Full backfill was not started: the measured sequential request estimate exceeds the remaining worker runtime. No complete ranking snapshot was published from these samples."
+    ]
+  },
+  "radarLiveCheck": {
+    "validationBudgetSeconds": 30,
+    "status": {
+      "source": "imd-radar",
+      "sourceRetrievedAt": 1791910133,
+      "asOfBlock": null,
+      "enabled": true,
+      "cachedResponses": 97,
+      "dataQuality": {
+        "status": "degraded",
+        "staleResponses": 0,
+        "unverified": true
+      },
+      "seatDetailsCached": 95,
+      "seatLimitPerRefresh": 2048,
+      "failures": [
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=7",
+          "attemptedAt": 1791910112,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=8",
+          "attemptedAt": 1791910113,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=15",
+          "attemptedAt": 1791910113,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=32",
+          "attemptedAt": 1791910114,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=38",
+          "attemptedAt": 1791910115,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=52",
+          "attemptedAt": 1791910116,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=88",
+          "attemptedAt": 1791910120,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=96",
+          "attemptedAt": 1791910120,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=100",
+          "attemptedAt": 1791910121,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=109",
+          "attemptedAt": 1791910121,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=121",
+          "attemptedAt": 1791910123,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=138",
+          "attemptedAt": 1791910125,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=148",
+          "attemptedAt": 1791910126,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=154",
+          "attemptedAt": 1791910126,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=162",
+          "attemptedAt": 1791910127,
+          "error": "unavailable"
+        },
+        {
+          "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=167",
+          "attemptedAt": 1791910128,
+          "error": "unavailable"
+        }
+      ],
+      "conflict": false,
+      "conflicts": [],
+      "rankingAuthority": "ethereum"
+    },
+    "uniqueSwarmSeats": 1079,
+    "launchWallets": 526,
+    "eligibleRewards": 2756,
+    "excludedRewards": 45884,
+    "conflictCount": 0,
+    "sources": [
+      {
+        "source": "imd-radar",
+        "sourceRetrievedAt": 1791908709,
+        "sourceUpdatedAt": null,
+        "asOfBlock": null,
+        "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=0",
+        "responseId": 3,
+        "responseHash": "661a574eed1fb0683a2cd57aade9448460cda68f1d7898cf700ffa739a6efd7a",
+        "schemaVersion": "imd-radar-observed-2026-10/v1",
+        "dataQuality": {
+          "stale": false,
+          "futureTimestamp": false,
+          "unverified": true,
+          "sourceTimestampAvailable": false
+        }
+      },
+      {
+        "source": "imd-radar",
+        "sourceRetrievedAt": 1791908709,
+        "sourceUpdatedAt": null,
+        "asOfBlock": null,
+        "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=1",
+        "responseId": 4,
+        "responseHash": "6c0957dc34492309a5d754aba9d48889afe4ccab4e110d9cb064fd7872597a25",
+        "schemaVersion": "imd-radar-observed-2026-10/v1",
+        "dataQuality": {
+          "stale": false,
+          "futureTimestamp": false,
+          "unverified": true,
+          "sourceTimestampAvailable": false
+        }
+      },
+      {
+        "source": "imd-radar",
+        "sourceRetrievedAt": 1791908709,
+        "sourceUpdatedAt": null,
+        "asOfBlock": null,
+        "sourceUrl": "https://www.imdradar.site/api/feed?view=seat&id=2",
+        "responseId": 5,
+        "responseHash": "145ea5a762845581d4f5b59faaca7720f4a51146686ef143d2bc6e6888b1b220",
+        "schemaVersion": "imd-radar-observed-2026-10/v1",
+        "dataQuality": {
+          "stale": false,
+          "futureTimestamp": false,
+          "unverified": true,
+          "sourceTimestampAvailable": false
+        }
+      },
+      {
+        "source": "imd-radar",
+        "sourceRetrievedAt": 1791910103,
+        "sourceUpdatedAt": 1791910099,
+        "asOfBlock": null,
+        "sourceUrl": "https://www.imdradar.site/api/feed?view=swarm",
+        "responseId": 6,
+        "responseHash": "ed4b1e33d6adc21dd459800d5d3473fcfab9168f000324173f0c63b073aabd66",
+        "schemaVersion": "imd-radar-observed-2026-10/v1",
+        "dataQuality": {
+          "stale": false,
+          "futureTimestamp": false,
+          "unverified": true,
+          "sourceTimestampAvailable": true
+        }
+      },
+      {
+        "source": "imd-radar",
+        "sourceRetrievedAt": 1791910111,
+        "sourceUpdatedAt": 1791910091,
+        "asOfBlock": null,
+        "sourceUrl": "https://www.imdradar.site/api/launchpad?view=agents",
+        "responseId": 7,
+        "responseHash": "1f0e98a12db469d36e61437b42ceb8a9cba3e54bd463dd39e951bb0f2067b6b7",
+        "schemaVersion": "imd-radar-observed-2026-10/v1",
+        "dataQuality": {
+          "stale": false,
+          "futureTimestamp": false,
+          "unverified": true,
+          "sourceTimestampAvailable": true
+        }
+      }
+    ]
+  },
+  "chromiumInteractions": {
+    "browser": "chromium",
+    "mockData": true,
+    "tests": [
+      {
+        "test": "Static subpath assets and mobile first-screen action",
+        "passed": true
+      },
+      {
+        "test": "Responsive reflow, focus, reduced motion and accessibility",
+        "passed": true
+      },
+      {
+        "test": "Invalid input has a focused inline error; valid input cannot pay for missing data",
+        "passed": true
+      },
+      {
+        "test": "No-wallet dialog has an actionable fallback and restores focus",
+        "passed": true
+      },
+      {
+        "test": "All leaderboard pack prices update and radio controls support the keyboard",
+        "passed": true
+      },
+      {
+        "test": "No payment when stale",
+        "passed": true
+      },
+      {
+        "test": "No payment when configuration",
+        "passed": true
+      },
+      {
+        "test": "No payment when not-found",
+        "passed": true
+      },
+      {
+        "test": "No payment when code-mismatch",
+        "passed": true
+      },
+      {
+        "test": "RPC failure shows unavailable values and refresh recovers",
+        "passed": true
+      },
+      {
+        "test": "Preflight deduplicates wallets, shows exact recipient and requires consent",
+        "passed": true
+      },
+      {
+        "test": "Insufficient balance, changed snapshot/account and rejected signature leave the query unpaid",
+        "passed": true
+      },
+      {
+        "test": "Pending transfer is exact, stored and recovered after a reload without paying twice",
+        "passed": true
+      },
+      {
+        "test": "Paid results expose metrics, raw token accounting, search, evidence and downloads",
+        "passed": true
+      },
+      {
+        "test": "Top 1,000 uses ten bounded pages, costs 2 IMD and renders paged results",
+        "passed": true
+      },
+      {
+        "test": "Recovery file import validates content and retrieves a receipt without a new payment",
+        "passed": true
+      },
+      {
+        "test": "Radar source lookup preserves conflicts, stale warnings, exclusions and Ethereum independence",
+        "passed": true
+      },
+      {
+        "test": "No JavaScript exceptions, local console errors or failed local resources",
+        "passed": true
+      }
+    ],
+    "errors": []
+  },
+  "designProbe": {
+    "checks": [
+      {
+        "name": "render",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 11235,
+        "output": "renders, no script errors or missing local files\nexternal hosts: ethereum-rpc.publicnode.com"
+      },
+      {
+        "name": "layout",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "no horizontal scroll at 320, 390 or 1440\nno text box overlaps another\nno floating control covers text\nno text cut off by overflow: hidden"
+      },
+      {
+        "name": "targets",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "all 15 controls at least 24px or spaced at 390\n1 under the 44px comfortable size"
+      },
+      {
+        "name": "contrast",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "all measured text meets 4.5:1 (3:1 large)"
+      },
+      {
+        "name": "casing",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "no all-caps text in content"
+      },
+      {
+        "name": "tracking",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "letter-spacing natural in content (display type may run tight)"
+      },
+      {
+        "name": "eyebrows",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 1,
+        "output": "no kicker labels above headings"
+      },
+      {
+        "name": "type-sizes",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "390: 3 sizes in use, 5 with one-offs (14px\u00d721, 16px\u00d717, 20px\u00d71, 28px\u00d72, 36px\u00d71)\n1440: 4 sizes in use, 6 with one-offs (14px\u00d738, 16px\u00d714, 20px\u00d76, 28px\u00d72, 36px\u00d71, 48px\u00d71)\nbar: 6 sizes used more than once, 8 counting one-offs, per width"
+      },
+      {
+        "name": "type-faces",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "families (1): arial\nweights (3): 400, 600, 700"
+      },
+      {
+        "name": "glyphs",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 1,
+        "output": "no em dashes or emoji in text"
+      },
+      {
+        "name": "slogans",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "no two-beat taglines"
+      },
+      {
+        "name": "repetition",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 1,
+        "output": "no repeated lines"
+      },
+      {
+        "name": "copy-budget",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "prose on the first screen: 28 words at 390 (bar 60), 40 at 1440 (bar 90)\nall words on the first screen: 57 at 390, 120 at 1440\nwhole page: 280 words, 151 of them prose"
+      },
+      {
+        "name": "chrome",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "border and shadow together: 0\ncards inside cards: 0\ngradient text: 0"
+      },
+      {
+        "name": "motion",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "transition: all on 0 elements\nendless animations: 0; still running with reduced motion: 0"
+      },
+      {
+        "name": "share",
+        "passed": true,
+        "exitCode": 0,
+        "durationMs": 0,
+        "output": "title \"IMD ChadBoard \u00b7 Wallets, ranked by action\", favicon, og:title, og:image, description"
+      }
+    ]
+  },
+  "browserLimitations": [
+    "WebKit could not keep a page open on this worker; not validated."
+  ],
+  "backendTests": {
+    "command": "python3 -m unittest discover -s service/tests -v",
+    "passed": 19
+  },
+  "frontendTests": {
+    "command": "npm test",
+    "passed": 10
+  },
+  "axe": {
+    "empty": [],
+    "review": [],
+    "results": [],
+    "radar": []
+  },
+  "submissionIntegrity": {
+    "protectedPathsChanged": [],
+    "secretMatches": 0,
+    "dependencyOrCacheArtifacts": [],
+    "symlinks": [],
+    "submodules": [],
+    "exportMatchesProductionBuild": true,
+    "exportBytes": 591587,
+    "missingAssets": [],
+    "requiredMetadataPresent": true,
+    "ignoreFileChanged": false,
+    "budgetBytes": 8388608,
+    "completeCandidateUncompressedUpperBoundBytes": 2600000,
+    "completeCandidateArchiveUpperBoundBytes": 800000,
+    "scope": "Existing Git candidates plus named artifacts; inputs and disposable scratch excluded. Bounds include these validation records. No ignore rules changed."
+  }
+}

@@ -51,12 +51,45 @@ until its operator publishes a current snapshot. The website does not invent
 rankings or collect fees for unavailable data. Its fee is an interface policy;
 underlying contract reads are public.
 
-Validation completed: production build, TypeScript check, seven unit tests,
-Chromium and WebKit interaction suites, automated accessibility checks and the
-pinned design probe. No real payment was signed or sent. See
+The original website validation is preserved below; current build, adapter,
+interaction and design-review results are recorded in
+[docs/VALIDATION.md](docs/VALIDATION.md). No real payment was signed or sent. See
 [website operation and rebuild instructions](docs/WEBSITE.md),
 [actual validation results and limitations](docs/WEBSITE-VALIDATION.md), and
 [implemented design system](DESIGN.md).
+
+## Optional IMD Radar enrichment
+
+The existing interface now exposes **Data sources · Ethereum rankings**, with a
+seat/wallet lookup, cached source evidence, stale warnings, explicit disagreements
+and liquidity-filtered launch estimates. Enable the optional server adapter with
+`CHADBOARD_RADAR_ENABLED=1`. Radar cannot change a score, ranked wallet set,
+immutable ordering, IMD balance, Transfer ledger or sale/retention classification.
+The site and Ethereum service continue to work when Radar is disabled or offline.
+
+From the repository root (Python 3.10+, no additional Python packages):
+
+```sh
+PYTHONPATH=service CHADBOARD_RADAR_ENABLED=1 python3 -m chadboard radar
+PYTHONPATH=service CHADBOARD_RADAR_ENABLED=1 python3 -m chadboard serve
+python3 -m unittest discover -s service/tests -v
+```
+
+Connect that service using the site's source disclosure or the existing `#api=`
+setting. See [adapter/API/configuration details](docs/RADAR.md),
+[service operations](docs/SERVICE.md), and [current validation](docs/VALIDATION.md).
+Keep `ETH_ARCHIVE_RPC_URL` in the server environment only; never use a `VITE_`
+variable for it. Run `PYTHONPATH=service python3 -m chadboard preflight` before
+starting historical indexing, then inspect `PYTHONPATH=service python3 -m chadboard coverage`.
+
+**Historical coverage limitation:** the supplied archive provider permits only
+10-block log ranges. The worker verified historical blocks and sample Transfer
+windows from **23,501,863 through 26,184,642**, but did not complete the full scan.
+The samples contain **8 events / 11 unique nonzero counterparties**, not
+whole-history totals. The exact gaps, dry-run and request estimate are in
+[the archive report](docs/RADAR-VALIDATION.json). No sample was promoted to
+a complete ranking. The existing holding heuristic remains separate from the
+ChadBoard contract's published participation score; the UI labels the distinction.
 
 ## What is measured
 

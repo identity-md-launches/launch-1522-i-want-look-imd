@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { getAddress, type Address } from "viem";
 import type { Snapshot, WalletRow } from "./domain";
+import { parseRadarObservation, type RadarObservation } from "./radar-data";
 
 // Optional off-chain data service (service/ in this repository). The static site
 // stays static: it only reads JSON from this read-only API. The base URL comes
@@ -26,7 +27,7 @@ export function feedBase(): string {
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { accept: "application/json" } });
+  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(12000) });
   const body = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(body.error ?? `Data service error ${response.status}`);
   return body;
@@ -44,6 +45,9 @@ type Feed = {
   stale: boolean;
   evidenceHash: `0x${string}`;
   scoreVersion: string;
+  seatCensusAvailable?: boolean;
+  source?: "ethereum" | "imd-radar" | "merged";
+  sourceRetrievedAt?: number;
 };
 
 export async function loadFeed(): Promise<Snapshot | null> {
@@ -60,11 +64,14 @@ export async function loadFeed(): Promise<Snapshot | null> {
     wallets: feed.wallets,
     stale: feed.stale,
     currentConfiguration: true,
-    reporter: "0x0000000000000000000000000000000000000000",
+    reporter: null,
     evidenceHash: feed.evidenceHash,
-    methodologyHash: `0x${"0".repeat(64)}`,
+    methodologyHash: null,
     source: "service",
     snapshotId: feed.snapshotId,
+    seatCensusAvailable: feed.seatCensusAvailable,
+    dataSource: feed.source,
+    sourceRetrievedAt: feed.sourceRetrievedAt,
   };
 }
 
@@ -74,15 +81,26 @@ type FeedWallet = {
   rank: number;
   score: number;
   tier: number;
-  seat?: { count: number };
+  seat?: { count: number; status?: string };
   balances?: { current: { raw: string }; totalSent: { raw: string } };
   holding?: { retentionRatioBps: number };
+  source?: "ethereum" | "imd-radar" | "merged";
+  sourceRetrievedAt?: number;
+  asOfBlock?: number;
+  conflict?: boolean;
+  radar?: RadarObservation;
 };
 
 function toRow(row: FeedWallet, token: Address): WalletRow {
+  // Malformed optional enrichment never makes the Ethereum rows unavailable.
+  let radar: RadarObservation | undefined;
+  try { if (row.radar) radar = parseRadarObservation(row.radar); } catch { radar = undefined; }
+  const provenance = { source: row.source, sourceRetrievedAt: row.sourceRetrievedAt, asOfBlock: row.asOfBlock,
+    conflict: row.conflict, radar, seatStatus: row.seat?.status };
   if (!row.found)
-    return { wallet: getAddress(row.wallet), found: false, rank: 0, score: 0, tier: 0, seats: 0 };
+    return { ...provenance, wallet: getAddress(row.wallet), found: false, rank: 0, score: 0, tier: 0, seats: 0 };
   return {
+    ...provenance,
     wallet: getAddress(row.wallet),
     found: true,
     rank: row.rank,
