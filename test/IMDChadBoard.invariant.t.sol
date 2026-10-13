@@ -123,6 +123,17 @@ contract BoardHandler is Test {
         ++abortedCount;
     }
 
+    /// Re-appointing the reporter is the owner's recovery path: it must abort any draft in the same transaction.
+    function rotateReporter() external {
+        bool pending = board.pendingEpoch() != 0;
+        uint64 configBefore = board.configuration();
+        vm.prank(owner);
+        board.setReporter(reporter);
+        if (pending) ++abortedCount;
+        assertEq(board.pendingEpoch(), 0);
+        assertEq(board.configuration(), configBefore + 1);
+    }
+
     function passTime(uint256 seconds_) external {
         vm.warp(vm.getBlockTimestamp() + bound(seconds_, 0, 3 days));
         vm.roll(vm.getBlockNumber() + 1);
@@ -241,7 +252,7 @@ contract BoardHandler is Test {
         r.tokens = new Board.TokenReport[](policies);
         if (r.metrics.claimedClaims != 0) {
             s = uint256(keccak256(abi.encode(s)));
-            uint64 maxDelay = uint64(s % 40 days);
+            uint64 maxDelay = uint64(s % (30 days + 1)); // Capped per claim; the window itself is valid.
             r.metrics.maxClaimDelay = maxDelay;
             r.metrics.totalClaimDelay = maxDelay * r.metrics.claimedClaims;
             s = uint256(keccak256(abi.encode(s)));

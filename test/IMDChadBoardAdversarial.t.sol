@@ -117,12 +117,18 @@ contract IMDChadBoardAdversarialTest is BoardFixture {
         assertEq(board.getEpoch(id).walletsWritten, 0);
     }
 
+    /// @dev The history check only bites on a chain younger than CLAIM_WINDOW, since the window cap is tested
+    ///      first; here the chain is 10 days old so a delay of the snapshot's full age is the exact limit.
     function testAppendRejectsClaimDelayLongerThanSnapshotHistory() public {
+        vm.warp(10 days);
         uint64 id = _begin(1, 1);
         Board.WalletReport memory r = _report(alice, 1, 1);
         uint64 snapshotTime = board.getEpoch(id).snapshot.timestamp;
+        assertLt(snapshotTime, board.CLAIM_WINDOW());
         r.metrics.maxClaimDelay = snapshotTime + 1;
         r.metrics.totalClaimDelay = snapshotTime + 1;
+        // Preview has no snapshot context and accepts the metrics; the append is what knows the history.
+        board.previewScore(r.metrics, r.tokens);
         Board.WalletReport[] memory reports = new Board.WalletReport[](1);
         reports[0] = r;
         vm.prank(reporter);
@@ -218,6 +224,27 @@ contract IMDChadBoardAdversarialTest is BoardFixture {
         input.blockHash = keccak256("real");
         vm.prank(reporter);
         board.beginEpoch(input);
+    }
+
+    /// @dev At distance 257 the EVM no longer serves the hash, so the check is skipped and any hash is stored
+    ///      as reporter-attested; at 256 it is still enforced. Documented trust boundary, pinned here.
+    function testBlockHashCheckSkippedExactlyBeyond256Blocks() public {
+        assertEq(vm.getBlockNumber(), 1000);
+        uint64 justInside = 744; // 1000 - 256
+        uint64 justOutside = 743; // 1000 - 257
+        vm.setBlockhash(justInside, keccak256("real inside"));
+        vm.setBlockhash(justOutside, keccak256("real outside"));
+        Board.SnapshotInput memory input = _input(0, 0);
+        input.blockNumber = justInside;
+        input.blockHash = keccak256("forged");
+        vm.prank(reporter);
+        vm.expectRevert(Board.BlockHashMismatch.selector);
+        board.beginEpoch(input);
+        input.blockNumber = justOutside;
+        vm.prank(reporter);
+        uint64 id = board.beginEpoch(input);
+        assertEq(board.getEpoch(id).snapshot.blockNumber, justOutside);
+        assertEq(board.getEpoch(id).snapshot.blockHash, keccak256("forged"));
     }
 
     function testFinalizeAtExactMaxAgeBoundary() public {
@@ -316,15 +343,102 @@ contract IMDChadBoardAdversarialTest is BoardFixture {
         assertLe(score, 10_000);
     }
 
-    function testMaximumClaimDelayValues() public view {
+    function testMaximumClaimDelayValues() public {
         Board.WalletReport memory r = _report(alice, 1, 0);
         r.metrics.eligibleClaims = type(uint32).max;
         r.metrics.claimedClaims = type(uint32).max;
+        // Uncapped delays are not valid observations: the indexer must cap each claim at the window.
         r.metrics.maxClaimDelay = type(uint64).max;
         r.metrics.totalClaimDelay = type(uint64).max;
+        vm.expectRevert(Board.InvalidMetrics.selector);
+        board.previewScore(r.metrics, r.tokens);
+        // The largest valid metrics: every one of 2**32-1 claims at exactly the window. No overflow, no points.
+        r.metrics.maxClaimDelay = uint64(board.CLAIM_WINDOW());
+        r.metrics.totalClaimDelay = uint64(board.CLAIM_WINDOW()) * uint64(type(uint32).max);
         (uint16 score,,) = board.previewScore(r.metrics, r.tokens);
-        // Average delay (max / max claims, ~136 years) is beyond the window: no speed points, no overflow.
         assertEq(score, 3950);
+        // One claim finished a window-length earlier moves the sum below claims * max and still earns nothing.
+        r.metrics.totalClaimDelay -= 1;
+        (score,,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(score, 3950);
+    }
+
+    /// @dev Speed points are 1500 * (window * claims - total) / (window * eligible), floored: the first point
+    ///      needs 1728 s of headroom under the window (1500 * 1728 == 30 days).
+    function testClaimSpeedPointsAtTheWindowBoundary() public view {
+        uint64 window = uint64(board.CLAIM_WINDOW());
+        assertEq(window, 30 days);
+        assertEq(_speedScore(window, window), 3000);
+        assertEq(_speedScore(window - 1, window - 1), 3000);
+        assertEq(_speedScore(window - 1727, window - 1727), 3000);
+        assertEq(_speedScore(window - 1728, window - 1728), 3001);
+        assertEq(_speedScore(window - 1729, window - 1729), 3001);
+        assertEq(_speedScore(window - 2 * 1728, window - 2 * 1728), 3002);
+        // The floor also works against the fast claimer: the full 1500 needs a zero delay.
+        assertEq(_speedScore(1729, 1729), 4498);
+        assertEq(_speedScore(1728, 1728), 4499);
+        assertEq(_speedScore(1, 1), 4499);
+        assertEq(_speedScore(0, 0), 4500);
+    }
+
+    /// @dev One claim, fully held, no launches, no apps, nothing bought: score is 3000 retention + speed points.
+    function _speedScore(uint64 total, uint64 max) private view returns (uint16 score) {
+        Board.WalletMetrics memory m = Board.WalletMetrics(1, 0, 1, 1, total, max, 0, 0);
+        Board.TokenReport[] memory tokens = new Board.TokenReport[](1);
+        tokens[0] = Board.TokenReport(1, 0, 0, 0, 1, 0, 0, 1);
+        (score,,) = board.previewScore(m, tokens);
+    }
+
+    function testTotalDelayBoundedByClaimsTimesMaxDelay() public {
+        uint64 window = uint64(board.CLAIM_WINDOW());
+        Board.WalletReport memory r = _report(alice, 1, 0);
+        r.metrics.eligibleClaims = 2;
+        r.metrics.claimedClaims = 2;
+        r.metrics.maxClaimDelay = window;
+        r.metrics.totalClaimDelay = 2 * window; // Exactly claims * max is the largest consistent sum.
+        (uint16 score,,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(score, 3950);
+        r.metrics.totalClaimDelay = 2 * window + 1;
+        vm.expectRevert(Board.InvalidMetrics.selector);
+        board.previewScore(r.metrics, r.tokens);
+        // The same bound with a sub-window maximum: one second over is rejected.
+        r.metrics.maxClaimDelay = 1 days;
+        r.metrics.totalClaimDelay = 2 days;
+        (score,,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(score, 3950 + 1450);
+        r.metrics.totalClaimDelay = 2 days + 1;
+        vm.expectRevert(Board.InvalidMetrics.selector);
+        board.previewScore(r.metrics, r.tokens);
+        // A sum below the maximum is impossible: the maximum is one of the summands.
+        r.metrics.totalClaimDelay = 1 days - 1;
+        vm.expectRevert(Board.InvalidMetrics.selector);
+        board.previewScore(r.metrics, r.tokens);
+        // The window is the largest reportable maximum; one second over is rejected even with a valid sum.
+        r.metrics.maxClaimDelay = window + 1;
+        r.metrics.totalClaimDelay = 2 * (window + 1);
+        vm.expectRevert(Board.InvalidMetrics.selector);
+        board.previewScore(r.metrics, r.tokens);
+    }
+
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzzTotalDelayAcceptedIffBetweenMaxAndClaimsTimesMax(uint8 claimsSeed, uint64 maxSeed, uint64 total)
+        public
+    {
+        uint32 claims = uint32(bound(claimsSeed, 1, 20));
+        uint64 max = uint64(bound(maxSeed, 0, board.CLAIM_WINDOW()));
+        Board.WalletReport memory r = _report(alice, 1, 0);
+        r.metrics.eligibleClaims = claims;
+        r.metrics.claimedClaims = claims;
+        r.metrics.maxClaimDelay = max;
+        r.metrics.totalClaimDelay = total;
+        bool valid = total >= max && total <= uint64(claims) * max;
+        if (!valid) vm.expectRevert(Board.InvalidMetrics.selector);
+        (uint16 score,,) = board.previewScore(r.metrics, r.tokens);
+        if (valid) {
+            // Independent oracle for the speed term; the other four terms are fixed by _report at 3950.
+            uint256 expected = 1500 * (uint256(30 days) * claims - total) / (uint256(30 days) * claims);
+            assertEq(score, 3950 + expected);
+        }
     }
 
     // ---------------------------------------------------------------- properties
@@ -429,7 +543,8 @@ contract IMDChadBoardAdversarialTest is BoardFixture {
         s = uint256(keccak256(abi.encode(s)));
         r.tokens = new Board.TokenReport[](1);
         if (r.metrics.claimedClaims != 0) {
-            uint64 maxDelay = uint64(s % 40 days);
+            // Delays are capped per claim at CLAIM_WINDOW by the indexer; the window itself is a valid value.
+            uint64 maxDelay = uint64(s % (30 days + 1));
             s = uint256(keccak256(abi.encode(s)));
             uint64 total = maxDelay + uint64(s % (uint256(maxDelay) * (r.metrics.claimedClaims - 1) + 1));
             r.metrics.maxClaimDelay = maxDelay;
