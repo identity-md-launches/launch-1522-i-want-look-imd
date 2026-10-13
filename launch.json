@@ -1,0 +1,10 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "IMDChadBoard",
+      "constructorArgs": ["$owner"]
+    }
+  ],
+  "notes": "IMDChadBoard takes one nonpayable address argument, initialOwner, supplied as $owner; the deployment factory receives no owner privileges. The constructor makes no external calls. The owner must configure the actual seat NFT, methodology hash, token policies and reporter through the existing owner-settable settings before snapshots can be published. The board stores immutable, atomically published snapshots of total and activated seats and associated wallets. Wallet metrics cover launch initiations, reward eligibility and claim counts, total and maximum first-claim delay, per-token claimed rewards, attributed rewards held, sold or otherwise transferred, extra purchases, balances and recognized ecosystem app interactions. summary, leaderboard, walletRating, walletAt and walletTokens expose snapshot totals, paginated ranks, 0-10000 scores, tiers and portfolio observations, with freshness and configuration indicators on summary and rating queries. Historical observations rely on the appointed reporter; the contract validates accounting, computes scores and enforces ordering and census totals. App interactions are on-chain activity evidence, not proof of website visits. This manifest deploys only the board and contains no operational configuration or publication calls."
+}
