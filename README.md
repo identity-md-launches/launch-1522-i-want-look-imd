@@ -21,7 +21,7 @@ its age and trust model.
 | --- | --- |
 | How many seats exist and are activated? | Existing, unburned ERC-721 seats; current activated seats; unique associated wallets; active seats per wallet. Multiple seats do not multiply a wallet's score. |
 | How many IMD launch tasks were initiated? | Distinct initiation IDs emitted by configured IMD launch sources, attributed to the initiator wallet. |
-| How long until rewards were claimed? | First nonzero claim time minus **eligibility time**, for each distinct reward allocation. The board stores counts, total delay, and maximum delay; its query tool also returns average seconds. The evidence report includes each allocation's timestamps, amount, received amount, and pending status. |
+| How long until rewards were claimed? | First nonzero claim time minus **eligibility time**, for each distinct reward allocation. The board stores counts, total delay, and maximum delay, with each allocation's delay **capped at 30 days** before it is summed; its query tool also returns the average of those capped seconds. The evidence report includes each allocation's raw timestamps, amount, received amount, and pending status. |
 | Sold or still holding rewards? | Claimed units, attributed reward units still held, reward units sold through recognized venues, reward units otherwise transferred/burned, and actual wallet balance at the snapshot block, per token. |
 | Bought extra ecosystem tokens? | Gross purchased units from recognized buy events matched to actual incoming token transfers. Gifts and reward claims do not count as purchases. |
 | Used an ecosystem website? | Successful on-chain interactions with configured app event sources, plus distinct app identities. **Browsing a website or connecting a wallet is not observable on-chain.** |
@@ -64,11 +64,14 @@ contracts**.
 
 Tests cover authorization, two-step ownership, unset dependencies, immutable
 history, atomic publication, duplicates, batch rollback, sorting and ties,
-pagination, stale data, configuration races, reward accounting, decimal
-differences, maximum input sizes and fuzzed score bounds/monotonicity. Indexer
-tests cover finalized reads, reorgs, eligibility and partial claims, transfer
-classification, NFT association changes, missing history, ambiguous transfers
-and all five metrics. A real local EVM test exercises the complete pipeline from
+pagination, stale data, configuration races, reporter revocation during a
+pending draft, reward accounting, decimal differences, dust-claim weighting,
+maximum input sizes and fuzzed score bounds/monotonicity (more disposals never
+raise a score; one more claim never lowers it). Indexer tests cover finalized
+reads, reorgs, eligibility and partial claims, capped late claims, transfer
+classification, equal same-kind transfers in one transaction, NFT association
+changes, missing history, re-emitted launch IDs, ambiguous transfers and all
+five metrics. A real local EVM test exercises the complete pipeline from
 emitted logs through publication and decoded queries.
 
 ## Deployment
@@ -103,16 +106,20 @@ must map their events into the schema in [docs/INDEXER.md](docs/INDEXER.md).
 | --- | --- |
 | `setSources(address nft, bytes32 policyHash)` | Actual IMD ERC-721 seat contract; SHA-256 of the reviewed canonical indexing policy from `policy-hash`. The policy binds the registry/activation events, launch and claim sources, token contracts, venues, apps, observation start and association semantics. |
 | `setTokenPolicies(TokenPolicy[] policies)` | The exact sorted, unique token addresses from that policy, with a nonzero `supportTarget` in native units for each. Obtain decimals and deployed addresses from the token maintainers and independently verify them. Owner chooses and publishes the support thresholds. Maximum 16 tokens. |
-| `setReporter(address reporter)` | The owner's designated operational signer or multisig. The application never chooses or owns this signer. The operator runs the indexer and pays publication gas. Setting zero explicitly **revokes** reporting; it is not a deployment stand-in. |
+| `setReporter(address reporter)` | The owner's designated operational signer or multisig. The application never chooses or owns this signer. The operator runs the indexer and pays publication gas. Setting zero explicitly **revokes** reporting; it is not a deployment stand-in. Any call aborts a pending draft first, so rotate only between publications unless you intend to discard the draft. |
 | `setMaxAge(uint64 seconds)` | Optional freshness requirement; default 2 days, permitted 1 hour–30 days. Set to match the actual publication schedule. |
 
 All configuration changes emit events, advance a configuration revision, and
 make existing snapshots report `currentConfiguration = false` and `stale = true`.
-Historical scoring inputs and results do not change. Configuration cannot change
-while a draft exists: finish it or call `abortEpoch` first. The owner can abort a
-stalled/compromised reporter's draft and then revoke or rotate the reporter.
-Ownership handover requires `transferOwnership` and acceptance by the nominated
-new owner. There is no renounce function or privileged wallet-score override.
+Historical scoring inputs and results do not change. Sources, token policies and
+`maxAge` cannot change while a draft exists: finish it or abort it first.
+`setReporter` is the exception: it aborts any pending draft in the same
+transaction (emitting `EpochAborted`) before writing the new reporter, so a
+stalled or compromised reporter that keeps re-opening drafts cannot block its own
+revocation or rotation. Once the reporter is revoked, no draft can be opened and
+the other setters are free again. Ownership handover requires
+`transferOwnership` and acceptance by the nominated new owner. There is no
+renounce function or privileged wallet-score override.
 
 ## Operate and query
 
@@ -174,12 +181,14 @@ payments or financial benefits attached to a score. Every division rounds down.
 | Component | Maximum | Rule |
 | --- | ---: | --- |
 | Launches | 3,000 | `100 * min(launches, 30)` |
-| Prompt claims | 1,500 | Let `C = claimedClaims`, `E = eligibleClaims`, `A = floor(totalClaimDelay / C)`. If C is zero, 0. Otherwise `floor(1500 * (30 days - min(A, 30 days)) * C / (30 days * E))`. Unclaimed allocations lower the completion fraction. |
-| Reward retention | 3,000 | For each token with claimed rewards, `floor(rewardHeld * 10000 / claimed)`. Average those basis-point ratios, then multiply by 3000/10000. No claims gives 0. |
+| Prompt claims | 1,500 | Let `C = claimedClaims`, `E = eligibleClaims`, `W = 30 days` and `T = totalClaimDelay`, where `T` is the sum over claimed allocations of `min(delay, W)`. If C is zero, 0. Otherwise `floor(1500 * (W * C - T) / (W * E))`, which equals `1500 * sum(W - min(delay_i, W)) / (W * E)`. Unclaimed allocations lower the completion fraction, and claiming an outstanding allocation, however late, never lowers the score. The board rejects `maxClaimDelay > W`. |
+| Reward retention | 3,000 | For each token with claimed rewards, `floor(rewardHeld * 10000 / claimed)`, weighted by `min(claimed, supportTarget) / supportTarget` (computed as `floor(min(claimed, supportTarget) * 2^128 / supportTarget)`, never zero for a nonzero claim). Divide the weighted sum by the sum of weights, then multiply by 3000/10000. No claims gives 0. A dust claim held in one token therefore cannot offset rewards sold in another. |
 | Extra purchases | 1,500 | For **every configured token**, `floor(min(bought, supportTarget) * 10000 / supportTarget)`. Average the ratios, then multiply by 1500/10000. |
 | Ecosystem apps | 1,000 | `100 * min(distinctApps, 10)` |
 
-Tokens are equally weighted after normalization; raw amounts with different
+Purchase ratios weight every configured token equally; retention ratios weight
+each token by its claimed size up to `supportTarget`, so `supportTarget` is
+also the scale of a "full-sized" reward position. Raw amounts with different
 decimals are never added together. Launches, purchases and app counts are
 lifetime-in-window counters. Purchase points use gross recognized buys, so
 round trips can increase them: this score is an explicit engagement heuristic,

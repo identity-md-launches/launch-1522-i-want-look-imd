@@ -227,12 +227,73 @@ class IndexerTest(unittest.TestCase):
                             event("claim", 12, 1, wallet=ALICE, allocation=12, token=TOKEN, amount=1, counterparty=SOURCE)]
         with self.assertRaisesRegex(imd.AuditError, "overclaimed"):
             imd.scan(imd.Policy(policy_raw()), FakeRpc(logs))
-        logs = history() + [event("launch", 12, wallet=ALICE, id=101)]
-        with self.assertRaisesRegex(imd.AuditError, "duplicate launch"):
+        logs = history() + [event("launch", 12, wallet=BOB, id=101)]
+        with self.assertRaisesRegex(imd.AuditError, "launch ID attributed to two wallets"):
             imd.scan(imd.Policy(policy_raw()), FakeRpc(logs))
         logs = history() + [event("eligible", 12, wallet=ALICE, allocation=12, token=TOKEN, amount=1)]
         with self.assertRaisesRegex(imd.AuditError, "duplicate reward allocation"):
             imd.scan(imd.Policy(policy_raw()), FakeRpc(logs))
+
+    def test_reemitted_launch_id_counts_once(self):
+        logs = history() + [event("launch", 12, wallet=ALICE, id=101), event("launch", 12, 1, wallet=ALICE, id=102)]
+        report = imd.scan(imd.Policy(policy_raw()), FakeRpc(logs, {(TOKEN, ALICE): 200}))
+        self.assertEqual(report["wallets"][0]["metrics"]["launches"], 2)
+
+    def test_equal_same_kind_transfers_in_one_transaction_are_paired_in_order(self):
+        claims = [transfer(5, 0, SOURCE, ALICE, 60),
+                  event("claim", 5, 1, wallet=ALICE, allocation=12, token=TOKEN, amount=60, counterparty=SOURCE),
+                  transfer(5, 2, SOURCE, ALICE, 60),
+                  event("claim", 5, 3, wallet=ALICE, allocation=13, token=TOKEN, amount=60, counterparty=SOURCE)]
+        report = imd.scan(imd.Policy(policy_raw()), FakeRpc(history()[:8] + claims, {(TOKEN, ALICE): 120}))
+        alice, bob = report["wallets"]
+        self.assertEqual((alice["tokens"][0]["claimed"], alice["tokens"][0]["reward_held"]), (120, 120))
+        self.assertEqual(alice["metrics"]["claimed_claims"], 2)
+        self.assertEqual([c["received"] for c in alice["claims"]], [60, 60])
+        self.assertEqual(bob["rank"], 2)
+        buys = [transfer(7, 0, VENUE, ALICE, 50),
+                event("buy", 7, 1, wallet=ALICE, token=TOKEN, amount=50, counterparty=VENUE),
+                transfer(7, 2, VENUE, ALICE, 50),
+                event("buy", 7, 3, wallet=ALICE, token=TOKEN, amount=50, counterparty=VENUE)]
+        report = imd.scan(imd.Policy(policy_raw()), FakeRpc(history()[:13] + buys, {(TOKEN, ALICE): 200}))
+        self.assertEqual(report["wallets"][0]["tokens"][0]["bought"], 100)
+        # Mixed kinds competing for identical transfers remain ambiguous: a claim and a buy from one venue.
+        mixed = buys[:3] + [event("buy", 7, 3, wallet=ALICE, token=TOKEN, amount=50, counterparty=VENUE)]
+        mixed[1] = event("claim", 7, 1, wallet=ALICE, allocation=13, token=TOKEN, amount=50, counterparty=VENUE)
+        with self.assertRaisesRegex(imd.AuditError, "ambiguous activity Transfer"):
+            imd.scan(imd.Policy(policy_raw()), FakeRpc(history()[:13] + mixed))
+        # Three identical transfers for two claims leave one of unknown provenance: still ambiguous.
+        with self.assertRaisesRegex(imd.AuditError, "ambiguous activity Transfer"):
+            imd.scan(imd.Policy(policy_raw()), FakeRpc(history()[:8] + claims + [transfer(5, 4, SOURCE, ALICE, 60)]))
+
+    def test_late_claims_are_capped_and_never_score_below_not_claiming(self):
+        unclaimed = imd.scan(imd.Policy(policy_raw()), FakeRpc(history(), {(TOKEN, ALICE): 200}))
+        height = 30000  # Fake block timestamps advance 100 seconds per block: well past the 30-day window.
+        late = [transfer(height, 0, SOURCE, ALICE, 200),
+                event("claim", height, 1, wallet=ALICE, allocation=13, token=TOKEN, amount=200, counterparty=SOURCE)]
+        rpc = FakeRpc(history() + late, {(TOKEN, ALICE): 400}, end=height)
+        report = imd.scan(imd.Policy(policy_raw()), rpc)
+        alice = report["wallets"][0]
+        self.assertEqual(alice["metrics"]["claimed_claims"], 2)
+        self.assertEqual(alice["metrics"]["total_claim_delay"], 100 + imd.WINDOW)
+        self.assertEqual(alice["metrics"]["max_claim_delay"], imd.WINDOW)
+        self.assertEqual(alice["claims"][1]["first_claim_at"], BASE + height * 100)  # Raw evidence is uncapped.
+        self.assertGreaterEqual(alice["score"], unclaimed["wallets"][0]["score"])
+        row = copy.deepcopy(alice)
+        row["metrics"].update(total_claim_delay=100 + imd.WINDOW + 1, max_claim_delay=imd.WINDOW + 1)
+        with self.assertRaisesRegex(imd.AuditError, "invalid claim delay"):
+            imd.score_row(row, imd.Policy(policy_raw()))
+
+    def test_retention_is_weighted_by_claim_size(self):
+        raw = policy_raw()
+        raw["tokens"].append({"address": VENUE, "support_target": "100"})
+        policy = imd.Policy(raw)
+        row = {"wallet": ALICE, "metrics": dict(zip(imd.METRICS, [1, 0, 2, 2, 0, 0, 0, 0])),
+               "tokens": [{"token": TOKEN, **dict(zip(imd.AMOUNTS, [10**24, 0, 10**24, 0, 0, 10**24, 0, 0]))},
+                          {"token": VENUE, **dict(zip(imd.AMOUNTS, [1, 0, 0, 0, 1, 0, 0, 1]))}]}
+        # Weights 2**128 (full) and 2**128 // 100 (one unit of a 100-unit target): 10000 * (1/101) -> 99 bps.
+        self.assertEqual(imd.score_row(row, policy), (1500 + 99 * 3000 // 10000, 99, 0))
+        row["tokens"][1].update(claimed=100, reward_held=100, balance=100)
+        self.assertEqual(imd.score_row(row, policy), (3000, 5000, 0))
 
     def test_identical_transfers_cannot_silently_misattribute_reward_provenance(self):
         # Gift, disposal, then reward of the same amount from the same source:

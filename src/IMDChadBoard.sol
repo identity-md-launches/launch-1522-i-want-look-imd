@@ -36,8 +36,8 @@ contract IMDChadBoard {
         uint32 launches;
         uint32 eligibleClaims; // Distinct reward allocations, including still-unclaimed allocations.
         uint32 claimedClaims; // Allocations with at least one nonzero claim, counted once each.
-        uint64 totalClaimDelay; // Sum of first-claim time minus eligibility time, in seconds.
-        uint64 maxClaimDelay;
+        uint64 totalClaimDelay; // Sum over claimed allocations of min(first-claim delay, CLAIM_WINDOW), in seconds.
+        uint64 maxClaimDelay; // Largest capped first-claim delay; never above CLAIM_WINDOW.
         uint32 interactions; // Successful, recognized on-chain app interactions.
         uint16 distinctApps;
     }
@@ -195,8 +195,15 @@ contract IMDChadBoard {
         emit OwnershipTransferred(previous, msg.sender);
     }
 
-    /// @notice Revoke with address(0). Abort an unfinished epoch before changing its reporter.
-    function setReporter(address nextReporter) external onlyOwner noPendingEpoch {
+    /// @notice Revoke with address(0). Any unfinished draft is aborted in the same transaction, so a reporter
+    ///         that keeps re-opening drafts cannot veto its own revocation or rotation.
+    function setReporter(address nextReporter) external onlyOwner {
+        uint64 pending = pendingEpoch;
+        if (pending != 0) {
+            _epochs[pending].status = Status.Aborted;
+            pendingEpoch = 0;
+            emit EpochAborted(pending);
+        }
         reporter = nextReporter;
         emit ReporterSet(nextReporter, ++configuration);
     }
@@ -423,14 +430,16 @@ contract IMDChadBoard {
         TokenPolicy[] storage policies
     ) private view returns (uint16 score, uint16 retentionBps, uint16 supportBps) {
         uint256 claims = metrics.claimedClaims;
+        // Each claim's delay is capped at CLAIM_WINDOW before it is summed, so one late claim can never
+        // outweigh the completion credit it earns: an extra claim adds a nonnegative term below.
         if (
             metrics.activeSeats == 0 || claims > metrics.eligibleClaims || metrics.distinctApps > metrics.interactions
                 || (claims == 0 && (metrics.totalClaimDelay != 0 || metrics.maxClaimDelay != 0))
-                || metrics.totalClaimDelay < metrics.maxClaimDelay
+                || metrics.maxClaimDelay > CLAIM_WINDOW || metrics.totalClaimDelay < metrics.maxClaimDelay
                 || metrics.totalClaimDelay > claims * metrics.maxClaimDelay
         ) revert InvalidMetrics();
         if (tokens.length != policies.length) revert InvalidTokenReport();
-        uint256 rewardedTokens;
+        uint256 retentionWeight;
         uint256 retentionSum;
         uint256 supportSum;
         for (uint256 i; i < tokens.length; ++i) {
@@ -440,21 +449,24 @@ contract IMDChadBoard {
                     || token.rewardHeld > token.balance || token.rewardSold > token.sold
                     || token.rewardOtherOut > token.otherOut
             ) revert InvalidTokenReport();
-            if (token.claimed != 0) {
-                ++rewardedTokens;
-                retentionSum += uint256(token.rewardHeld) * BPS / token.claimed;
-            }
             uint256 target = policies[i].supportTarget;
+            if (token.claimed != 0) {
+                // Weight each token's ratio by its claimed size relative to the token's support target,
+                // so a dust claim held in one token cannot offset rewards sold in another. The weight is
+                // at least 1 for any nonzero claim because supportTarget < 2**128.
+                uint256 weight = (_min(token.claimed, target) << 128) / target;
+                retentionWeight += weight;
+                retentionSum += weight * (uint256(token.rewardHeld) * BPS / token.claimed);
+            }
             supportSum += _min(token.bought, target) * BPS / target;
         }
-        if ((claims == 0) != (rewardedTokens == 0)) revert InvalidMetrics();
-        retentionBps = rewardedTokens == 0 ? 0 : uint16(retentionSum / rewardedTokens);
+        if ((claims == 0) != (retentionWeight == 0)) revert InvalidMetrics();
+        retentionBps = retentionWeight == 0 ? 0 : uint16(retentionSum / retentionWeight);
         supportBps = uint16(supportSum / policies.length);
         uint256 claimPoints;
         if (claims != 0) {
-            uint256 averageDelay = metrics.totalClaimDelay / claims;
-            claimPoints = 1500 * (CLAIM_WINDOW - _min(averageDelay, CLAIM_WINDOW)) * claims
-                / (CLAIM_WINDOW * metrics.eligibleClaims);
+            claimPoints =
+                1500 * (CLAIM_WINDOW * claims - metrics.totalClaimDelay) / (CLAIM_WINDOW * metrics.eligibleClaims);
         }
         score = uint16(
             _min(metrics.launches, 30) * 100 + claimPoints + uint256(retentionBps) * 3000 / BPS + uint256(supportBps)

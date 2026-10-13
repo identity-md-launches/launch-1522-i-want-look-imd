@@ -11,8 +11,8 @@ separate threat model and independent review.
 
 | Party / input | Power and limitation |
 | --- | --- |
-| Owner | Configures source/policy, reporter, token thresholds and freshness. Can abort drafts and transfer ownership with acceptance. Cannot rewrite published records or change the score formula. A compromised owner can appoint a dishonest reporter; changes are visible but not prevented by a timelock. |
-| Reporter | Attests complete censuses, historical activity and balances. Can omit wallets, invent structurally consistent observations or censor new reports. Contract validation cannot prove the event history. No reporter-held funds or user approvals are required. |
+| Owner | Configures source/policy, reporter, token thresholds and freshness. Can abort drafts and transfer ownership with acceptance. `setReporter` aborts a pending draft atomically, so the owner can always revoke or rotate the reporter in one transaction. Cannot rewrite published records or change the score formula. A compromised owner can appoint a dishonest reporter; changes are visible but not prevented by a timelock. |
+| Reporter | Attests complete censuses, historical activity and balances. Can omit wallets, invent structurally consistent observations or censor new reports, and can publish fabricated epochs until revoked. Cannot block its own revocation: keeping a draft open only blocks the other setters until the owner rotates it. Contract validation cannot prove the event history. No reporter-held funds or user approvals are required. |
 | RPC and source contracts | Indexer trusts RPC completeness and authentic event semantics. It verifies canonical block hashes and pins balance reads, but a malicious RPC could fabricate a consistent response set. Source contracts that allow spoofed wallet fields undermine attribution. |
 | Policy | Selects time window, tokens, thresholds, association semantics and recognized event sources. Excluding a venue reduces sale coverage. A changed policy invalidates freshness of older snapshots; it does not retroactively re-score them. |
 | Consumer | Must check observation time, current configuration, `found`, evidence and data availability. Rank zero means absent. “Other out” is unresolved disposition, not proof of continued holding or a sale. |
@@ -36,6 +36,24 @@ separate threat model and independent review.
 - Drafts do not replace `latestEpoch`. Partial uploads, expired drafts, failed
   batches, duplicates and seat total mismatches cannot publish. The owner can
   abort a stalled draft without the reporter's cooperation.
+- A reporter veto was found by independent review: every owner setter required
+  no pending draft, while the reporter could re-open a draft in the block after
+  each `abortEpoch`, so `abortEpoch` followed by `setReporter` could be raced
+  forever. `setReporter` now aborts the pending draft in the same transaction;
+  the other setters keep the no-draft rule because once the reporter is revoked
+  nothing can open a draft. A regression test replays the abort/re-begin race.
+- Claim-speed points previously capped the *average* delay, so one claim far
+  outside the window erased the completion credit of earlier prompt claims and
+  a wallet could rank higher by never claiming an old allocation. Each delay is
+  now capped at 30 days before summing (the indexer stores capped delays and the
+  board rejects a larger maximum), and the score is the exact sum
+  `1500 * Σ(W - min(d_i, W)) / (W * E)`, so an extra claim adds a nonnegative
+  term. A fuzz test asserts that one more claim never lowers the score.
+- Retention previously averaged per-token ratios unweighted, so a wallet that
+  sold its whole reward in one token could recover half the retention credit by
+  claiming and holding one unit of another. Ratios are now weighted by
+  `min(claimed, supportTarget) / supportTarget`; a test pins the dust case and
+  a fuzz test checks that claiming and holding more never lowers retention.
 - Wallet ranks are assigned while validating both score and address ordering
   across batch boundaries. The reporter cannot choose arbitrary rank numbers.
   Read cost is bounded by a requested page; global rank does not scan wallets.
@@ -48,10 +66,21 @@ separate threat model and independent review.
   could cause a naive matcher to choose the gift and mislabel an intervening
   disposal as a reward sale. The scanner now rejects multiple matching transfers;
   a regression test covers that exact sequence.
-- Recognized event/Transfer pairing is unique per transaction and requires exact
-  amounts and counterparties. Missing transfers, overclaims, duplicate allocation
-  IDs, malformed addresses, removed/conflicting logs and wrong-chain responses
-  fail closed. Self transfers and gifts do not farm purchased/held reward units.
+- Recognized event/Transfer pairing requires exact amounts and counterparties
+  per transaction. Identical transfers are paired in log order only when the
+  events competing for them are all of one kind and none is left over, because
+  every pairing then produces the same ledger; otherwise the scan aborts.
+  Missing transfers, overclaims, duplicate allocation IDs, a launch ID attributed
+  to two wallets, malformed addresses, removed/conflicting logs and wrong-chain
+  responses fail closed. A re-emitted launch ID for the same wallet counts once.
+  Self transfers and gifts do not farm purchased/held reward units.
+- Because the scanner replays the whole window on every run, any abort blocks
+  publication for every wallet until the operator resolves it. The aborts that
+  remain are those where no automatic choice is sound (surplus or mixed-kind
+  identical transfers, overclaims, inconsistent histories); a seat wallet that
+  triggers one deliberately stalls publication until a reviewed adapter or
+  policy change handles it, and the owner should treat that as an operational
+  incident rather than loosen the checks.
 - Recent block hashes are checked on-chain; old hashes and all timestamp/metric
   attestations remain a trust assumption. The indexer requires finalized reads
   and rechecks the block. Snapshot freshness is information for readers, not a
@@ -73,7 +102,9 @@ Publish the methodology and support thresholds so readers can interpret the
 score's incentives. Protect the reporting signer and monitor stale snapshots.
 
 Gross buys, prompt partial claims, capped initiation counts and distinct app
-usage are gameable heuristics. There is no financial settlement, wash-trade
+usage are gameable heuristics. Retention weighting uses `supportTarget` as the
+scale of a full-sized position, so a claim far below that target carries little
+retention weight whether held or sold. There is no financial settlement, wash-trade
 filter, Sybil identity proof, claim eligibility proof or off-chain browsing
 telemetry. Off-chain provenance assumptions and trust are deliberate and visible.
 

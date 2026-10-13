@@ -47,7 +47,7 @@ synthetic event names used in its tests.
 | --- | --- | --- |
 | `activate` | `seat`; also `wallet` when mode is `activation` | Can update an existing association. Seat must exist. |
 | `deactivate` | `seat` | Clears current activation. |
-| `launch` | `wallet`, `id` | Nonempty `group` names the launch ID namespace. IDs count once within that namespace. Map the initiator, not a transaction relayer. |
+| `launch` | `wallet`, `id` | Nonempty `group` names the launch ID namespace. IDs count once within that namespace: a re-emitted ID for the same wallet (a retry or re-initiation) is ignored, while the same ID attributed to a different wallet aborts the scan because the descriptor is not mapping the initiator. Map the initiator, not a transaction relayer. |
 | `eligible` | `wallet`, `allocation`, `token`, `amount` | Nonempty `group` names the reward allocation namespace. A positive entitlement becomes claimable at this block's timestamp. |
 | `claim` | `wallet`, `allocation`, `token`, `amount`, `counterparty` | Same `group` as its eligibility source. Wallet is both beneficiary and actual token recipient. Counterparty is the token sender. |
 | `buy` | `wallet`, `token`, `amount`, `counterparty` | Counterparty is the token sender/venue. Event must mean a purchase for this wallet, not a liquidity withdrawal or gift. |
@@ -98,12 +98,17 @@ trade when evidence is missing.
    activity logs, in bounded block ranges. `--chunk-size` defaults to 2000; lower
    it if the RPC rejects result size. The operator must use a provider that does
    not silently truncate logs. There are no partial-results fallbacks.
-4. Match each recognized claim/buy/sell event to a **unique, unused exact**
+4. Match each recognized claim/buy/sell event to an **exact**
    `(token, sender, recipient, amount)` Transfer in the same transaction. Match
    the transaction before processing its log order, since events often follow
-   token movement. Missing, duplicate-classified or ambiguous movements abort.
-   Identical candidate transfers with different possible provenance require a
-   source-specific adapter; choosing one would misattribute holdings.
+   token movement. Events that demand the same movement are matched as a group:
+   when the number of identical transfers equals the number of such events and
+   every event has the same kind (two equal claims from one distributor, two
+   equal buys from one venue in a multicall), they are paired in log order,
+   because any pairing yields the same ledger. A surplus identical transfer (a
+   gift beside a reward of the same amount), a shortfall, or events of mixed
+   kinds competing for the same transfers abort the scan; those need a
+   source-specific adapter, since choosing one would misattribute holdings.
 5. Replay transfers in log order. On reward receipt, increase claimed and reward
    held. On each outgoing transfer, remove `min(amount, rewardHeld)` from reward
    held and attribute it to reward sold or reward other-out according to the
@@ -111,8 +116,10 @@ trade when evidence is missing.
    transfer or zero transfer has no effect. Ordinary incoming transfers only
    affect the later balance read, not purchased/reward amounts.
 6. Count unique initiation IDs. Record each eligibility allocation once. First
-   nonzero claim determines claim latency; later partial claims increase token
-   totals without duplicating claim count or changing that latency. Reject
+   nonzero claim determines claim latency, stored as `min(delay, 30 days)` so
+   that `totalClaimDelay` and `maxClaimDelay` never exceed what the board scores
+   (the per-allocation evidence keeps the raw timestamps); later partial claims
+   increase token totals without duplicating claim count or changing that latency. Reject
    missing eligibility, beneficiary/token mismatches and claims exceeding the
    entitlement. Unclaimed allocations remain in `eligibleClaims`. The generic
    adapter assumes allocations are not later canceled, revoked or reassigned.
@@ -148,8 +155,9 @@ order. Equal scores use ascending numeric addresses. Each row has:
 
 - Wallet address.
 - `WalletMetrics`: active seats, launches, eligible claims, claimed claims,
-  total first-claim delay, maximum first-claim delay, interactions, distinct apps.
-  Counts are uint32, delays are uint64, and distinct apps is uint16.
+  total capped first-claim delay, maximum capped first-claim delay, interactions,
+  distinct apps. Counts are uint32, delays are uint64 and at most 30 days each
+  (the board rejects a larger maximum), and distinct apps is uint16.
 - One `TokenReport` per epoch token, in policy order: claimed, bought, sold,
   other out, reward held, reward sold, reward other out, balance. All are uint128.
 
@@ -162,7 +170,8 @@ the entire batch. Appending does not expose a draft as a published ranking.
 `finalizeEpoch(epoch)` requires exactly the declared wallet count and activated
 seat sum and an unexpired snapshot. It publishes atomically. `abortEpoch(epoch)`
 is available to the owner or current reporter and never deletes published
-history. Aborted draft storage remains on-chain but cannot be queried through
+history; the owner's `setReporter` also aborts a pending draft inline, so a
+reporter rotation never waits on the reporter. Aborted draft storage remains on-chain but cannot be queried through
 the published wallet/leaderboard APIs. An empty activated census can publish
 with zero rows.
 

@@ -223,7 +223,7 @@ class Ledger:
         self.active_seats = Counter()
         self.metrics = defaultdict(metric_defaults)
         self.portfolios = defaultdict(amount_defaults)
-        self.launches = set()
+        self.launches = {}
         self.allocations = {}
         self.apps = defaultdict(set)
         self.interactions = set()
@@ -263,9 +263,11 @@ class Ledger:
 
     def observe_activity(self, logs, timestamp):
         decoded = [(log, self.policy.decode(log)) for log in logs]
-        transfers = [(log, transfer(log)) for log in logs
-                     if log["address"].lower() in self.token_addresses and log["topics"][0].lower() == TRANSFER]
-        classifications = {}
+        movements = defaultdict(list)
+        for log in logs:
+            if log["address"].lower() in self.token_addresses and log["topics"][0].lower() == TRANSFER:
+                movements[(log["address"].lower(), *transfer(log))].append(uint(log["logIndex"]))
+        demands = defaultdict(list)
         # Match the entire transaction before processing log order: a claim event usually follows its Transfer.
         for log, event in decoded:
             if not event or event["kind"] not in ("claim", "buy", "sell") or event["wallet"] not in self.active_seats:
@@ -275,12 +277,18 @@ class Ledger:
             require(wallet != counterparty and (counterparty != ZERO or event["kind"] == "claim"),
                     "self trade or zero venue")
             origin, destination = (wallet, counterparty) if event["kind"] == "sell" else (counterparty, wallet)
-            candidates = [item for item, movement in transfers if item["address"].lower() == token
-                          and movement == (origin, destination, event["amount"])
-                          and uint(item["logIndex"]) not in classifications]
-            require(bool(candidates), "activity event lacks a matching, unused token Transfer")
-            require(len(candidates) == 1, "ambiguous activity Transfer; an ABI-specific adapter must resolve it")
-            classifications[uint(candidates[0]["logIndex"])] = event["kind"]
+            demands[(token, origin, destination, event["amount"])].append(event["kind"])
+        classifications = {}
+        for movement, kinds in demands.items():
+            candidates = movements.get(movement, [])
+            require(len(candidates) >= len(kinds), "activity event lacks a matching, unused token Transfer")
+            # Identical transfers are only interchangeable when every event competing for them has the same
+            # kind and none is left over: then any pairing yields the same ledger. A surplus transfer (a gift
+            # beside a reward) or mixed kinds would make the pairing, and therefore the attribution, a guess.
+            require(len(candidates) == len(kinds) and len(set(kinds)) == 1,
+                    "ambiguous activity Transfer; an ABI-specific adapter must resolve it")
+            for index in candidates:
+                classifications[index] = kinds[0]
 
         for log, event in decoded:
             token = log["address"].lower()
@@ -309,9 +317,12 @@ class Ledger:
             metrics = self.metrics[wallet]
             if kind == "launch":
                 key = (event["group"], event["id"])
-                require(key not in self.launches, "duplicate launch ID")
-                self.launches.add(key)
-                metrics["launches"] += 1
+                # An ID counts once per namespace: a re-emitted initiation is not a second launch. The same
+                # ID attributed to another wallet means the descriptor does not map the initiator; abort.
+                require(self.launches.get(key, wallet) == wallet, "launch ID attributed to two wallets")
+                if key not in self.launches:
+                    self.launches[key] = wallet
+                    metrics["launches"] += 1
             elif kind == "eligible":
                 key = (event["group"], event["allocation"])
                 require(key not in self.allocations, "duplicate reward allocation")
@@ -329,7 +340,9 @@ class Ledger:
                 require(timestamp >= allocation["eligible_at"], "negative claim latency")
                 if allocation["first_claim_at"] is None:
                     allocation["first_claim_at"] = timestamp
-                    delay = timestamp - allocation["eligible_at"]
+                    # The board stores each delay capped at the scoring window; the raw timestamps stay in
+                    # the report's per-allocation evidence. A late claim therefore never scores below no claim.
+                    delay = min(timestamp - allocation["eligible_at"], WINDOW)
                     metrics["claimed_claims"] += 1
                     metrics["total_claim_delay"] += delay
                     metrics["max_claim_delay"] = max(metrics["max_claim_delay"], delay)
@@ -373,10 +386,10 @@ def score_row(row, policy):
         uint(metrics[name], bits)
     require(metrics["active_seats"] > 0 and metrics["claimed_claims"] <= metrics["eligible_claims"], "invalid metrics")
     claims, delay, maximum = metrics["claimed_claims"], metrics["total_claim_delay"], metrics["max_claim_delay"]
-    require(metrics["distinct_apps"] <= metrics["interactions"] and maximum <= delay <= claims * maximum,
-            "invalid claim delay or app totals")
+    require(metrics["distinct_apps"] <= metrics["interactions"] and maximum <= WINDOW
+            and maximum <= delay <= claims * maximum, "invalid claim delay or app totals")
     require(len(tokens) == len(policy.tokens), "token report length mismatch")
-    retention, support = [], []
+    retention, weights, support = [], [], []
     for token, configured in zip(tokens, policy.tokens):
         require(address(token["token"]) == configured["address"], "token report order mismatch")
         for name in AMOUNTS:
@@ -384,14 +397,17 @@ def score_row(row, policy):
         require(token["reward_held"] + token["reward_sold"] + token["reward_other_out"] == token["claimed"]
                 and token["reward_held"] <= token["balance"] and token["reward_sold"] <= token["sold"]
                 and token["reward_other_out"] <= token["other_out"], "inconsistent reward attribution/balance")
-        if token["claimed"]:
-            retention.append(token["reward_held"] * 10000 // token["claimed"])
         target = configured["support_target"]
+        if token["claimed"]:
+            # Mirror the board: each token's ratio is weighted by min(claimed, target) / target.
+            weight = (min(token["claimed"], target) << 128) // target
+            weights.append(weight)
+            retention.append(weight * (token["reward_held"] * 10000 // token["claimed"]))
         support.append(min(token["bought"], target) * 10000 // target)
     require(bool(claims) == bool(retention), "claims/token report mismatch")
-    retention_bps = sum(retention) // len(retention) if retention else 0
+    retention_bps = sum(retention) // sum(weights) if retention else 0
     support_bps = sum(support) // len(support)
-    speed = 1500 * (WINDOW - min(delay // claims, WINDOW)) * claims // (WINDOW * metrics["eligible_claims"]) if claims else 0
+    speed = 1500 * (WINDOW * claims - delay) // (WINDOW * metrics["eligible_claims"]) if claims else 0
     score = min(metrics["launches"], 30) * 100 + speed + retention_bps * 3000 // 10000
     score += support_bps * 1500 // 10000 + min(metrics["distinct_apps"], 10) * 100
     return score, retention_bps, support_bps
@@ -614,6 +630,7 @@ def query(rpc, board, wallet=None, epoch=None, offset=0, limit=20):
                             "support_bps": rating[18], "metrics": metrics,
                             "average_first_claim_delay": metrics["total_claim_delay"] // metrics["claimed_claims"]
                             if metrics["claimed_claims"] else None,
+                            "claim_delay_cap": WINDOW,
                             "tokens": [{"token": "0x" + f"{policy[0]:040x}", **dict(zip(AMOUNTS, amounts))}
                                        for policy, amounts in zip(policies, portfolio)]}
     else:

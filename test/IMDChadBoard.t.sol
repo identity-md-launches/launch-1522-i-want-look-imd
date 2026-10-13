@@ -190,17 +190,21 @@ contract IMDChadBoardTest is BoardFixture {
         assertEq(uint8(board.tierFor(7500)), 3);
     }
 
-    function testUnclaimedAndSlowClaimsEarnNoSpeedPoints() public view {
+    function testUnclaimedAndSlowClaimsEarnNoSpeedPoints() public {
         Board.WalletReport memory r = _report(alice, 1, 0);
         r.metrics = Board.WalletMetrics(1, 0, 5, 0, 0, 0, 0, 0);
         r.tokens[0] = Board.TokenReport(0, 0, 0, 0, 0, 0, 0, 0);
         (uint16 score,,) = board.previewScore(r.metrics, r.tokens);
         assertEq(score, 0);
         r = _report(alice, 1, 0);
-        r.metrics.totalClaimDelay = 31 days;
-        r.metrics.maxClaimDelay = 31 days;
+        r.metrics.totalClaimDelay = 30 days;
+        r.metrics.maxClaimDelay = 30 days;
         (score,,) = board.previewScore(r.metrics, r.tokens);
         assertEq(score, 3950);
+        // Delays are capped per claim before summing; an uncapped value is not a valid observation.
+        r.metrics.totalClaimDelay = 30 days + 1;
+        r.metrics.maxClaimDelay = 30 days + 1;
+        _expectBadReport(r, Board.InvalidMetrics.selector);
         r.metrics.totalClaimDelay = 0;
         r.metrics.maxClaimDelay = 0;
         r.metrics.eligibleClaims = 2;
@@ -302,14 +306,14 @@ contract IMDChadBoardTest is BoardFixture {
         board.beginEpoch(input);
         vm.startPrank(owner);
         vm.expectRevert(Board.PendingEpoch.selector);
-        board.setReporter(stranger);
-        vm.expectRevert(Board.PendingEpoch.selector);
         board.setSources(nft, POLICY);
         vm.expectRevert(Board.PendingEpoch.selector);
         board.setTokenPolicies(policies);
         vm.expectRevert(Board.PendingEpoch.selector);
         board.setMaxAge(1 days);
-        board.abortEpoch(id);
+        // Rotating the reporter aborts its draft in the same transaction, so no abort race is possible.
+        vm.expectEmit(true, false, false, true, address(board));
+        emit Board.EpochAborted(id);
         board.setReporter(stranger);
         vm.stopPrank();
         input.configuration = board.configuration();
@@ -692,8 +696,8 @@ contract IMDChadBoardTest is BoardFixture {
         uint128 other = uint128(bound(otherSeed, 0, claimed - sold));
         uint128 held = claimed - sold - other;
         Board.WalletReport memory r = _report(alice, 1, launches);
-        r.metrics.totalClaimDelay = delay;
-        r.metrics.maxClaimDelay = delay;
+        r.metrics.totalClaimDelay = uint64(bound(delay, 0, 30 days));
+        r.metrics.maxClaimDelay = r.metrics.totalClaimDelay;
         r.tokens[0] = Board.TokenReport(claimed, bought, sold, other, held, sold, other, held);
         (uint16 score, uint16 retention, uint16 support) = board.previewScore(r.metrics, r.tokens);
         assertLe(score, 10_000);
@@ -701,6 +705,138 @@ contract IMDChadBoardTest is BoardFixture {
         assertLe(support, 10_000);
         assertEq(retention, uint256(held) * 10_000 / claimed);
         assertEq(uint256(held) + sold + other, claimed);
+    }
+
+    function testOwnerCanRevokeReporterWhileItsDraftIsPending() public {
+        uint64 first = _begin(1, 1);
+        vm.prank(owner);
+        board.abortEpoch(first);
+        // The reporter re-opens a draft before the owner's next transaction lands.
+        uint64 second = _begin(1, 1);
+        assertEq(board.pendingEpoch(), second);
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true, address(board));
+        emit Board.EpochAborted(second);
+        board.setReporter(address(0));
+        assertEq(board.reporter(), address(0));
+        assertEq(board.pendingEpoch(), 0);
+        assertEq(uint8(board.getEpoch(second).status), uint8(Board.Status.Aborted));
+        assertEq(board.latestEpoch(), 0);
+        Board.WalletReport[] memory reports = new Board.WalletReport[](1);
+        reports[0] = _report(alice, 1, 1);
+        vm.startPrank(reporter);
+        vm.expectRevert(Board.NotConfigured.selector);
+        board.appendWallets(second, reports);
+        vm.expectRevert(Board.NotConfigured.selector);
+        board.finalizeEpoch(second);
+        Board.SnapshotInput memory input = _input(1, 1);
+        vm.expectRevert(Board.NotConfigured.selector);
+        board.beginEpoch(input);
+        vm.stopPrank();
+        // With the veto gone, the remaining owner setters work again.
+        vm.startPrank(owner);
+        board.setSources(nft, keccak256("rotated methodology"));
+        board.setMaxAge(1 days);
+        board.setReporter(stranger);
+        vm.stopPrank();
+        input = _input(1, 1);
+        vm.prank(stranger);
+        assertGt(board.beginEpoch(input), second);
+    }
+
+    function testFuzzClaimingAnotherAllocationNeverLowersScore(
+        uint8 eligibleSeed,
+        uint8 claimedSeed,
+        uint32 delaySeed,
+        uint32 newDelaySeed
+    ) public view {
+        uint32 eligible = uint32(bound(eligibleSeed, 1, 50));
+        uint32 claimed = uint32(bound(claimedSeed, 0, eligible - 1));
+        uint64 delay = uint64(bound(delaySeed, 0, 30 days));
+        Board.WalletReport memory r = _report(alice, 1, 0);
+        r.metrics = Board.WalletMetrics(1, 0, eligible, claimed, delay * claimed, claimed == 0 ? 0 : delay, 0, 0);
+        uint128 units = uint128(claimed) * 100e6;
+        r.tokens[0] = Board.TokenReport(units, 0, 0, 0, units, 0, 0, units);
+        (uint16 beforeScore,,) = board.previewScore(r.metrics, r.tokens);
+        // One more allocation is claimed, possibly far outside the window, and held: the indexer caps it.
+        uint64 capped = uint64(bound(newDelaySeed, 0, 400 days));
+        if (capped > 30 days) capped = 30 days;
+        r.metrics.claimedClaims += 1;
+        r.metrics.totalClaimDelay += capped;
+        if (capped > r.metrics.maxClaimDelay) r.metrics.maxClaimDelay = capped;
+        r.tokens[0].claimed += 100e6;
+        r.tokens[0].rewardHeld += 100e6;
+        r.tokens[0].balance += 100e6;
+        (uint16 afterScore,,) = board.previewScore(r.metrics, r.tokens);
+        assertGe(afterScore, beforeScore);
+    }
+
+    function testDustClaimInAnotherTokenCannotRestoreRetention() public {
+        address second = address(0x3000);
+        vm.etch(second, hex"00");
+        Board.TokenPolicy[] memory policies = new Board.TokenPolicy[](2);
+        policies[0] = Board.TokenPolicy(token, 100e18);
+        policies[1] = Board.TokenPolicy(second, 100e18);
+        vm.prank(owner);
+        board.setTokenPolicies(policies);
+        Board.WalletReport memory r = _report(alice, 1, 0);
+        r.metrics = Board.WalletMetrics(1, 0, 1, 1, 0, 0, 0, 0);
+        r.tokens = new Board.TokenReport[](2);
+        r.tokens[0] = Board.TokenReport(1_000_000e18, 0, 1_000_000e18, 0, 0, 1_000_000e18, 0, 0);
+        r.tokens[1] = Board.TokenReport(0, 0, 0, 0, 0, 0, 0, 0);
+        (uint16 dumpedScore, uint16 dumpedRetention,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(dumpedRetention, 0);
+        assertEq(dumpedScore, 1500);
+        // Claiming and holding one indivisible unit elsewhere barely moves the weighted retention.
+        r.metrics = Board.WalletMetrics(1, 0, 2, 2, 0, 0, 0, 0);
+        r.tokens[1] = Board.TokenReport(1, 0, 0, 0, 1, 0, 0, 1);
+        (uint16 dustScore, uint16 dustRetention,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(dustRetention, 0);
+        assertEq(dustScore, 1500);
+        // An honest holder of 49% in the first token alone still ranks above the dust claimer.
+        r.metrics = Board.WalletMetrics(1, 0, 1, 1, 0, 0, 0, 0);
+        r.tokens[0] = Board.TokenReport(100e18, 0, 51e18, 0, 49e18, 51e18, 0, 49e18);
+        r.tokens[1] = Board.TokenReport(0, 0, 0, 0, 0, 0, 0, 0);
+        (uint16 honestScore, uint16 honestRetention,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(honestRetention, 4900);
+        assertGt(honestScore, dustScore);
+        // Two full-sized positions are still weighted equally.
+        r.metrics = Board.WalletMetrics(1, 0, 2, 2, 0, 0, 0, 0);
+        r.tokens[1] = Board.TokenReport(100e18, 0, 0, 0, 100e18, 0, 0, 100e18);
+        (, uint16 equalRetention,) = board.previewScore(r.metrics, r.tokens);
+        assertEq(equalRetention, 7450);
+    }
+
+    function testFuzzRetentionIsWeightedByClaimSizeAndHoldingMoreNeverLowersIt(
+        uint128 claimedA,
+        uint128 heldA,
+        uint128 claimedB,
+        uint128 extra
+    ) public {
+        address second = address(0x3000);
+        vm.etch(second, hex"00");
+        Board.TokenPolicy[] memory policies = new Board.TokenPolicy[](2);
+        policies[0] = Board.TokenPolicy(token, 100e18);
+        policies[1] = Board.TokenPolicy(second, 1e6);
+        vm.prank(owner);
+        board.setTokenPolicies(policies);
+        claimedA = uint128(bound(claimedA, 1, type(uint128).max / 2));
+        heldA = uint128(bound(heldA, 0, claimedA));
+        claimedB = uint128(bound(claimedB, 1, type(uint128).max / 2));
+        extra = uint128(bound(extra, 1, type(uint128).max / 2));
+        Board.WalletReport memory r = _report(alice, 1, 0);
+        r.metrics = Board.WalletMetrics(1, 0, 2, 2, 0, 0, 0, 0);
+        r.tokens = new Board.TokenReport[](2);
+        r.tokens[0] = Board.TokenReport(claimedA, 0, claimedA - heldA, 0, heldA, claimedA - heldA, 0, heldA);
+        r.tokens[1] = Board.TokenReport(claimedB, 0, claimedB, 0, 0, claimedB, 0, 0);
+        (, uint16 beforeRetention,) = board.previewScore(r.metrics, r.tokens);
+        uint256 ratioA = uint256(heldA) * 10_000 / claimedA;
+        assertLe(beforeRetention, ratioA);
+        // Claiming more of token B and holding it never lowers the weighted retention.
+        r.tokens[1] = Board.TokenReport(claimedB + extra, 0, claimedB, 0, extra, claimedB, 0, extra);
+        (, uint16 afterRetention,) = board.previewScore(r.metrics, r.tokens);
+        assertGe(afterRetention, beforeRetention);
+        assertLe(afterRetention, 10_000);
     }
 
     function testFuzzScoreNeverIncreasesWhenMoreRewardsAreDisposed(uint128 heldSeed, uint128 lossSeed) public view {
