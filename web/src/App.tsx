@@ -157,7 +157,9 @@ function SnapshotStatus({
                 ? "Could not reach Ethereum"
                 : status.snapshot.stale
                   ? "Snapshot is out of date"
-                  : `Snapshot #${status.snapshot.epoch} available`}
+                  : status.snapshot.source === "service"
+                    ? `Snapshot ${status.snapshot.snapshotId} available (data service)`
+                    : `Snapshot #${status.snapshot.epoch} available`}
         </span>
       </div>
       <button
@@ -702,6 +704,8 @@ export default function App() {
                   {status.snapshot.block}
                 </a>
                 . Results describe this snapshot, not real-time wallet activity.
+                {status.snapshot.source === "service" &&
+                  " This snapshot comes from the ChadBoard data service and is not yet published on the Ethereum board."}
               </p>
             )}
           </div>

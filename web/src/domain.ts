@@ -29,6 +29,10 @@ export type Snapshot = {
   reporter: Address;
   evidenceHash: Hex;
   methodologyHash: Hex;
+  // "service" rows come from the read-only data service feed while the board
+  // has no published epoch; "chain" rows come from the IMDChadBoard contract.
+  source?: "chain" | "service";
+  snapshotId?: string;
 };
 export type BoardStatus =
   | { kind: "loading" }

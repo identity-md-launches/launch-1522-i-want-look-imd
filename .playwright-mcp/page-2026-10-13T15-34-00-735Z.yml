@@ -1,0 +1,76 @@
+- generic [ref=e2]:
+  - link "Skip to query" [ref=e3] [cursor=pointer]:
+    - /url: "#query"
+  - banner [ref=e4]:
+    - link [ref=e5] [cursor=pointer]:
+      - /url: "#"
+      - generic [ref=e9]:
+        - text: IMD
+        - strong [ref=e10]: ChadBoard
+    - button "Connect wallet" [ref=e12] [cursor=pointer]
+  - main [ref=e13]:
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Wallets, ranked by action." [level=1] [ref=e16]
+        - paragraph [ref=e17]: Explore the on-chain activity of activated IMD seats.
+      - generic [ref=e18]:
+        - generic [aria-hidden] [ref=e19]: ◇
+        - text: Ethereum mainnet
+    - region [ref=e21]:
+      - heading "Run a query" [level=2] [ref=e23]
+      - group "Query type" [ref=e27]:
+        - button "Wallets" [pressed] [ref=e28] [cursor=pointer]
+        - button "Leaderboard" [ref=e29] [cursor=pointer]
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - generic [ref=e32]: Ethereum wallet addresses
+          - textbox "Ethereum wallet addresses" [ref=e34]:
+            - /placeholder: Paste one or more 0x addresses
+          - paragraph [ref=e35]: Separate with commas or new lines. Up to 100 unique wallets.
+        - generic [ref=e36]:
+          - generic [ref=e37]:
+            - text: Query fee
+            - generic [ref=e38]: 0.1 IMD
+          - generic [ref=e39]: Per wallet+ Ethereum gas
+        - button "Check query" [ref=e40] [cursor=pointer]
+        - paragraph [ref=e43]: Review first. Your fee goes to the dead address.
+    - region "Board status" [ref=e44]:
+      - generic [ref=e45]: Checking the Ethereum board…
+      - button "Refresh" [disabled] [ref=e48]
+    - region "Snapshot overview" [ref=e51]:
+      - generic [ref=e52]:
+        - generic [ref=e53]: Total seats
+        - strong [ref=e54]: Checking…
+      - generic [ref=e55]:
+        - generic [ref=e56]: Activated seats
+        - strong [ref=e57]: Checking…
+      - generic [ref=e58]:
+        - generic [ref=e59]: Ranked wallets
+        - strong [ref=e60]: Checking…
+      - generic [ref=e61]:
+        - generic [ref=e62]: Observed at
+        - strong [ref=e63]: Checking…
+    - region [ref=e64]:
+      - generic [ref=e65]:
+        - heading "The record behind the rank." [level=2] [ref=e66]
+        - paragraph [ref=e67]: A view of ecosystem participation, built from the wallets associated with activated IMD NFT seats.
+        - link "View ChadBoard on Etherscan ↗" [ref=e68] [cursor=pointer]:
+          - /url: https://etherscan.io/address/0xd27c1f25427a04db405db956fd8b859a53784f28
+      - generic [ref=e69]:
+        - group [ref=e70]:
+          - generic "What does the score measure?" [ref=e71] [cursor=pointer]
+          - paragraph [ref=e72]: Launches earn up to 30 points, reward retention 30, claim timing 15, extra token purchases 15, and distinct ecosystem apps 10. The contract stores scores from 0 to 10,000; this interface displays them out of 100.
+          - paragraph [ref=e73]: "Observer: below 25. Contributor: 25–49.99. Chad: 50–74.99. GigaChad: 75–100. These tiers describe measured participation."
+        - group [ref=e74]:
+          - generic "Where does the data come from?" [ref=e75] [cursor=pointer]
+        - group [ref=e76]:
+          - generic "How do query payments work?" [ref=e77] [cursor=pointer]
+        - group [ref=e78]:
+          - generic "Why might a wallet be missing?" [ref=e79] [cursor=pointer]
+        - group [ref=e80]:
+          - generic "Where are my results saved?" [ref=e81] [cursor=pointer]
+  - contentinfo [ref=e82]:
+    - generic [ref=e83]: IMD ChadBoard
+    - generic [ref=e84]: Built on participation. Recorded on Ethereum.
+    - link "Back to query ↑" [ref=e85] [cursor=pointer]:
+      - /url: "#query"

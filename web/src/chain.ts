@@ -16,6 +16,7 @@ import {
 } from "viem";
 import { mainnet } from "viem/chains";
 import { boardAbi } from "./board-abi";
+import { feedLeaders, feedWallets, loadFeed } from "./feed";
 import {
   BOARD,
   BOARD_RUNTIME_HASH,
@@ -77,7 +78,11 @@ export async function loadBoard(): Promise<BoardStatus> {
     functionName: "latestEpoch",
     blockNumber,
   });
-  if (epoch === 0n) return { kind: "empty" };
+  if (epoch === 0n) {
+    // No on-chain epoch yet: fall back to the data service snapshot when one is configured.
+    const feed = await loadFeed();
+    return feed ? { kind: "ready", snapshot: feed } : { kind: "empty" };
+  }
   const [data, stale, currentConfiguration] = await client.readContract({
     address: BOARD,
     abi: boardAbi,
@@ -99,6 +104,7 @@ export async function loadBoard(): Promise<BoardStatus> {
       reporter: data.reporter,
       evidenceHash: data.snapshot.evidenceHash,
       methodologyHash: data.methodologyHash,
+      source: "chain",
     },
   };
 }
@@ -121,8 +127,21 @@ export async function prepareQuery(
     throw new Error(
       "This snapshot has no ranked wallets. No payment is needed. Check again after a new snapshot is published.",
     );
-  const epoch = BigInt(snapshot.epoch);
   const rows: WalletRow[] = [];
+  if (snapshot.source === "service" && snapshot.snapshotId) {
+    onProgress("Reading the data service snapshot…");
+    rows.push(
+      ...(query.kind === "leaders"
+        ? await feedLeaders(snapshot.snapshotId, query.count, IMD)
+        : await feedWallets(snapshot.snapshotId, query.wallets, IMD)),
+    );
+    if (!rows.some((row) => row.found))
+      throw new Error(
+        "None of these wallets is in the latest snapshot. No payment is needed.",
+      );
+    return { query, snapshot, rows, createdAt: Date.now() };
+  }
+  const epoch = BigInt(snapshot.epoch);
   if (query.kind === "leaders") {
     const count = Math.min(query.count, snapshot.wallets);
     for (let offset = 0; offset < count; offset += 100) {
