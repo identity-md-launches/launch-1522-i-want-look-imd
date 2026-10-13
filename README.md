@@ -15,6 +15,49 @@ included all real activity. Every snapshot identifies its observation block,
 reporter, methodology, configuration and evidence hash. Consumers must display
 its age and trust model.
 
+## Website: query wallets and send fees to the dead address
+
+The static website is in **`dist/index.html`**, with React/TypeScript source and
+its npm lockfile in `web/`. It connects to the existing Ethereum board and IMD
+token. The supplied recipient is
+`0x000000000000000000000000000000000000dEaD`.
+
+To install, check, rebuild and preview (Node 22.12+):
+
+```sh
+cd web
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run preview
+```
+
+The build writes repository-root `dist/`. Serve that directory over HTTP(S);
+relative assets and anchor navigation support static hosting at a subpath.
+The installation initially needs the npm registry or a populated cache. Do not
+include dependency or cache directories in a Git submission.
+
+Wallet lists cost 0.1 IMD per unique address. Top 10/50/100/1,000 cost
+0.1/0.5/1/2 IMD respectively. The interface checks availability, shows the exact
+fee and recipient, requests consent, sends an ERC-20 transfer and validates its
+receipt before displaying results. No token approval or new contract is involved.
+Results support metric details, filtering, pagination, JSON/CSV downloads and
+pending-payment recovery.
+
+**Live availability:** at Ethereum block 26183635 on 2026-10-13, the deployed
+board had no published epoch and configuration was unset. Payments remain paused
+until its operator publishes a current snapshot. The website does not invent
+rankings or collect fees for unavailable data. Its fee is an interface policy;
+underlying contract reads are public.
+
+Validation completed: production build, TypeScript check, seven unit tests,
+Chromium and WebKit interaction suites, automated accessibility checks and the
+pinned design probe. No real payment was signed or sent. See
+[website operation and rebuild instructions](docs/WEBSITE.md),
+[actual validation results and limitations](docs/WEBSITE-VALIDATION.md), and
+[implemented design system](DESIGN.md).
+
 ## What is measured
 
 | Question | Delivered observation |
